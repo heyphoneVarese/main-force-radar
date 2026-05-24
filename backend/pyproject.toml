@@ -1,0 +1,41 @@
+[project]
+name = "main-force-radar-backend"
+version = "0.1.0"
+description = "主力风向标 backend"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2.0",
+    "akshare",
+    "apscheduler",
+    "anthropic",
+    "httpx",
+    "pydantic-settings",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "black",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
