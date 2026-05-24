@@ -30,24 +30,6 @@ class SectorFlowDaily(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=cn_now)
 
 
-class NorthFlowIntraday(Base):
-    """北向资金盘中快照。每次采集存一行,精度由 snapshot_time 决定。"""
-
-    __tablename__ = "north_flow_intraday"
-    __table_args__ = (
-        UniqueConstraint("trade_date", "snapshot_time", name="uq_north_flow_date_time"),
-        Index("idx_north_flow_date", "trade_date"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
-    snapshot_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    total_inflow_wan_x10000: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    sh_inflow_wan_x10000: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    sz_inflow_wan_x10000: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=cn_now)
-
-
 class MarketIndexDaily(Base):
     """市场指数日线(上证综指 / 深证成指 / 创业板指 / 沪深 300 等)。"""
 
