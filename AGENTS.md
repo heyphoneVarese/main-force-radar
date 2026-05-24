@@ -111,8 +111,8 @@ main-force-radar/
 ## 🗄️ 核心数据库表
 
 详细 schema 在后续任务中给出,核心表:
-- funds (基金信息)
-- holdings (我的持仓)
+- funds (基金信息;含 related_sectors JSON 数组,基金→板块映射)
+- holdings (我的持仓;含 bought_at 建仓日)
 - fund_nav_daily (基金每日净值)
 - sector_flow_daily (板块资金流)
 - market_index_daily (市场指数日线:上证/深证/创业板/沪深300 等)
@@ -124,12 +124,12 @@ main-force-radar/
 
 ## ✅ 开发节奏(必须按此顺序)
 
-### Phase 1: 基础设施 (Week 1)
-1. 项目初始化
-2. 数据库 schema + 迁移
-3. utils/money.py + 单元测试
-4. akshare 采集脚本
-- 里程碑: 能拉到今日板块资金流并入库
+### Phase 1: 基础设施 (Week 1) ✅ 完成 (2026-05-25)
+1. 项目初始化 ✅
+2. 数据库 schema + 迁移 ✅
+3. utils/money.py + 单元测试 ✅
+4. akshare 采集脚本 ✅(sina 指数已通,东财 sector_flow 在 dev 因 DNS 不通,代码 + 测试就位,Phase 4 部署 VPS 后激活)
+- 里程碑: 能拉到 4 大市场指数并入库 ✅(sector_flow 里程碑延后至 Phase 4)
 
 ### Phase 2: 核心功能 (Week 2)
 5. 持仓管理 API + 前端

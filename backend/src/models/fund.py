@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Date,
     DateTime,
@@ -27,6 +28,8 @@ class Fund(Base):
     manager: Mapped[str | None] = mapped_column(String(50), nullable=True)
     establish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     tracking_target: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Phase 2.5a 新增:基金 → 关注板块映射(JSON 字符串数组,如 ["BK0428"])
+    related_sectors: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=cn_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=cn_now, onupdate=cn_now
@@ -44,6 +47,8 @@ class Holding(Base):
     )
     cost_nav_x10000: Mapped[int] = mapped_column(BigInteger, nullable=False)
     shares_x100: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Phase 2.5a 新增:建仓日(NOT NULL)
+    bought_at: Mapped[date] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=cn_now)
     updated_at: Mapped[datetime] = mapped_column(
