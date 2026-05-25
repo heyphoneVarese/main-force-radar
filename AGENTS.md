@@ -116,6 +116,7 @@ main-force-radar/
 - fund_nav_daily (基金每日净值)
 - sector_flow_daily (板块资金流)
 - market_index_daily (市场指数日线:上证/深证/创业板/沪深300 等)
+- sector_aliases (中文标签 → eastmoney 板块代码映射,Phase 2.6 新增)
 - signals (信号记录)
 - push_logs (推送日志)
 - user_config (用户配置)

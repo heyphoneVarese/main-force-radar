@@ -2,6 +2,7 @@
 
 from src.models.fund import Fund, FundNavDaily, Holding
 from src.models.market import MarketIndexDaily, SectorFlowDaily
+from src.models.sector import SectorAlias
 from src.models.signal import Signal
 from src.models.system import PushLog, UserConfig
 
@@ -11,6 +12,7 @@ __all__ = [
     "Holding",
     "MarketIndexDaily",
     "PushLog",
+    "SectorAlias",
     "SectorFlowDaily",
     "Signal",
     "UserConfig",
