@@ -4,9 +4,15 @@ import type { Fund, Holding, HoldingCreate, HoldingUpdate } from '../types'
 const BASE = '/api' // vite proxy 转到 localhost:8000
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  // 只在带 body 时才发 Content-Type:application/json。
+  // DELETE 没有 body,带上这个 header 在 iOS Safari 同源 fetch 下偶发
+  // "Load failed" 网络层错(疑似触发非必要 preflight)。
+  const headers: Record<string, string> = init?.body
+    ? { 'Content-Type': 'application/json' }
+    : {}
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   })
   if (!res.ok) {
     let detail = res.statusText
