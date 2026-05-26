@@ -82,9 +82,10 @@ class ServerChanNotifier:
         holdings_by_sector: dict[str, list[tuple[str, str]]] | None = None,
         as_of: date | None = None,
         ai_analysis: str | None = None,
+        title_label: str = "主力风向标",
     ) -> bool:
         title, content = self.build_summary_markdown(
-            signals, holdings_by_sector, as_of, ai_analysis
+            signals, holdings_by_sector, as_of, ai_analysis, title_label
         )
         return self.send(title, content)
 
@@ -94,10 +95,12 @@ class ServerChanNotifier:
         holdings_by_sector: dict[str, list[tuple[str, str]]] | None = None,
         as_of: date | None = None,
         ai_analysis: str | None = None,
+        title_label: str = "主力风向标",
     ) -> tuple[str, str]:
         """渲染 Markdown,返回 (title, desp)。
         holdings_by_sector: sector_code → [(fund_code, fund_name), ...]
         ai_analysis:        Phase 3.10 — Claude 生成的 markdown 分析,非空则插入「AI 分析师视角」段
+        title_label:        Phase 3.11 — 不同 cron 用不同标签(盘前简报/盘中观察/收盘复盘/周报)
         """
         as_of = as_of or cn_today()
         holdings_by_sector = holdings_by_sector or {}
@@ -109,7 +112,7 @@ class ServerChanNotifier:
                 grouped[s.signal_type].append(s)
 
         # 标题
-        title = f"📊 主力风向标 · {as_of.isoformat()}"
+        title = f"📊 {title_label} · {as_of.isoformat()}"
 
         # 正文
         lines: list[str] = []

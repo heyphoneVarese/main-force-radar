@@ -13,30 +13,14 @@
 
 import logging
 
-from sqlalchemy import select
-
 from src.config import settings
 from src.db import SessionLocal
-from src.models import Fund, Holding
 from src.services.ai_analyst import AIAnalyst
+from src.services.holdings_summary import build_holdings_by_sector
 from src.services.notifier import ServerChanNotifier
-from src.services.sector_mapping import get_sectors_for_fund
 from src.services.signal_engine import SignalEngine
 
 logger = logging.getLogger(__name__)
-
-
-def build_holdings_by_sector(session) -> dict[str, list[tuple[str, str]]]:
-    """sector_code → [(fund_code, fund_name), ...]"""
-    out: dict[str, list[tuple[str, str]]] = {}
-    holdings = session.scalars(select(Holding)).all()
-    for h in holdings:
-        fund = session.get(Fund, h.fund_code)
-        if fund is None:
-            continue
-        for sector_code in get_sectors_for_fund(session, h.fund_code):
-            out.setdefault(sector_code, []).append((h.fund_code, fund.fund_name))
-    return out
 
 
 def main() -> None:

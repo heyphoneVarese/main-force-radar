@@ -110,6 +110,16 @@ def test_markdown_title_uses_as_of_date():
     assert "📊" in title and "主力风向标" in title
 
 
+def test_markdown_title_uses_custom_label():
+    """Phase 3.11: title_label 让 scheduler 区分盘前/盘中/收盘/周报。"""
+    title, _ = ServerChanNotifier.build_summary_markdown(
+        signals=[], as_of=date(2026, 5, 27), title_label="盘前简报"
+    )
+    assert "盘前简报" in title
+    assert "主力风向标" not in title  # 不再用默认标签
+    assert "2026-05-27" in title
+
+
 def test_markdown_renders_all_three_sections():
     signals = [
         _mk_signal("BK0490", "半导体", "bullish", 8, 95),

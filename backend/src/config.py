@@ -16,5 +16,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     server_chan_sckey: str = ""
 
+    # Phase 3.11: APScheduler 总开关
+    # 默认 false(安全) — 只在 VPS 上设 true 才会触发自动 cron 推送
+    scheduler_enabled: bool = False
+
 
 settings = Settings()
