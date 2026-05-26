@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./main_force_radar.db"
     anthropic_api_key: str = ""
-    serverchan_key: str = ""
+    server_chan_sckey: str = ""
 
 
 settings = Settings()
