@@ -149,12 +149,16 @@ class SignalScheduler:
             )
 
         # 2. AI 分析(可选,失败 fallback)
+        # Phase 3.9: 传 push_type,让 AIAnalyst 派发到对应模板
         ai_analysis = ""
         if settings.anthropic_api_key:
             try:
                 analyst = AIAnalyst(api_key=settings.anthropic_api_key)
                 ai_analysis = analyst.analyze_signals(
-                    signals, holdings_by_sector, macro_context=macro_context
+                    signals,
+                    holdings_by_sector,
+                    macro_context=macro_context,
+                    push_type=push_type,
                 )
                 logger.info(
                     "Job [%s] AI 分析: %d 字符",

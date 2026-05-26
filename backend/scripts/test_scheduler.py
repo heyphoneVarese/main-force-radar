@@ -82,6 +82,9 @@ def main() -> None:
             if "title" in captured:
                 print(f"\n[MOCK] 标题:{captured['title']}")
                 print(f"[MOCK] 长度:{len(captured['content'])} 字符 (没真发)")
+                print("[MOCK] === 完整 markdown 内容(下方)===")
+                print(captured["content"])
+                print("[MOCK] === 内容结束 ===")
             else:
                 print("\n[MOCK] notifier.send 未被调用(SERVER_CHAN_SCKEY 未配置)")
         else:

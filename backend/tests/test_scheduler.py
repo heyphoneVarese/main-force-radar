@@ -256,6 +256,28 @@ def test_run_push_job_continues_when_ai_fails():
     assert mock_write_log.call_args.kwargs["success"] is True
 
 
+def test_run_push_job_passes_push_type_to_ai_analyst():
+    """Phase 3.9: scheduler 必须把 push_type 传给 AIAnalyst,
+    让对应的 prompts 模块被派发(盘前/盘中/收盘/周报 各有自己的 system prompt)。"""
+    s = SignalScheduler()
+    with patch("src.services.scheduler.SignalEngine") as mock_engine_cls, \
+         patch("src.services.scheduler.build_holdings_by_sector", return_value={}), \
+         patch("src.services.scheduler.AIAnalyst") as mock_ai_cls, \
+         patch("src.services.notifier.ServerChanNotifier.send", return_value=True), \
+         patch("src.services.scheduler.write_push_log"), \
+         patch("src.services.scheduler.settings") as mock_settings:
+        mock_settings.anthropic_api_key = "sk-test"
+        mock_settings.server_chan_sckey = "test"
+        mock_engine_cls.return_value.generate_signals_for_holdings.return_value = []
+        mock_ai_cls.return_value.analyze_signals.return_value = ""
+
+        s._run_push_job("morning", "盘前简报", "macro for morning")
+
+    kwargs = mock_ai_cls.return_value.analyze_signals.call_args.kwargs
+    assert kwargs["push_type"] == "morning"
+    assert kwargs["macro_context"] == "macro for morning"
+
+
 def test_run_push_job_skips_ai_when_no_api_key():
     s = SignalScheduler()
     with patch("src.services.scheduler.SignalEngine") as mock_engine_cls, \

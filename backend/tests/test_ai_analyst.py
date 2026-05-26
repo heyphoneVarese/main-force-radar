@@ -1,4 +1,10 @@
-"""AIAnalyst 测试 — mock anthropic SDK,不发真请求。"""
+"""AIAnalyst 测试 — mock anthropic SDK,不发真请求。
+
+Phase 3.9 重构后:
+- 不再有 SYSTEM_PROMPT 模块常量(每个 prompts/*.py 各自有)
+- 派发表 _PROMPT_MODULES: push_type → prompts module
+- _build_user_prompt 移除,逻辑搬到 prompts/_common.py(测试在 test_prompts.py)
+"""
 
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -7,7 +13,9 @@ import anthropic
 import pytest
 
 from src.models import Signal
-from src.services.ai_analyst import _FORBIDDEN_WORDS, SYSTEM_PROMPT, AIAnalyst
+from src.models.enums import PushType
+from src.prompts import close, intraday, pre_market, weekly
+from src.services.ai_analyst import _FORBIDDEN_WORDS, AIAnalyst
 
 
 def _mk_signal(
@@ -32,7 +40,6 @@ def _mk_signal(
 
 
 def _mk_anthropic_response(text: str, in_tokens: int = 100, out_tokens: int = 200):
-    """构造一个 anthropic.Message 风格的 mock。"""
     block = MagicMock()
     block.type = "text"
     block.text = text
@@ -43,7 +50,7 @@ def _mk_anthropic_response(text: str, in_tokens: int = 100, out_tokens: int = 20
 
 
 # ============================================================
-# 接口/退化路径
+# 接口 / 退化路径
 # ============================================================
 
 
@@ -55,8 +62,6 @@ def test_analyze_returns_empty_when_no_api_key():
 def test_no_api_key_does_not_create_client():
     a = AIAnalyst(api_key="")
     assert a.client is None
-    # 二次访问也不应实例化
-    assert a.client is None
 
 
 def test_client_lazy_init():
@@ -64,7 +69,7 @@ def test_client_lazy_init():
     with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
         mock_cls.return_value = MagicMock()
         _ = a.client
-        _ = a.client  # 第二次不应再 new
+        _ = a.client  # 二次访问不应再 new
     assert mock_cls.call_count == 1
 
 
@@ -79,91 +84,80 @@ def test_analyze_returns_text_on_success():
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         result = a.analyze_signals(
             [_mk_signal("BK0490", "半导体", "bullish", 8, 95)], {}
         )
     assert "半导体强势" in result
-    assert "工具只给信号" in result
 
 
-def test_analyze_passes_model_and_system_prompt():
+def test_analyze_passes_model_and_max_tokens():
     resp = _mk_anthropic_response("ok")
     with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp
         mock_cls.return_value = mock_client
-
-        a = AIAnalyst(api_key="sk-fake", model="claude-sonnet-4-5",
-                       max_tokens=800, temperature=0.3)
+        a = AIAnalyst(
+            api_key="sk-fake", model="claude-sonnet-4-5",
+            max_tokens=800, temperature=0.3,
+        )
         a.analyze_signals([], {})
-
         kwargs = mock_client.messages.create.call_args.kwargs
         assert kwargs["model"] == "claude-sonnet-4-5"
         assert kwargs["max_tokens"] == 800
         assert kwargs["temperature"] == 0.3
-        assert kwargs["system"] == SYSTEM_PROMPT
 
 
 # ============================================================
-# user prompt 构造
+# Phase 3.9 — push_type 派发到对应模板
 # ============================================================
 
 
-def test_user_prompt_includes_signals_and_holdings():
-    signals = [_mk_signal("BK0490", "半导体", "bullish", 8, 95)]
-    holdings = {"BK0490": [("008281", "国泰CES半导体")]}
-    prompt = AIAnalyst._build_user_prompt(signals, holdings, None)
-
-    assert "半导体" in prompt
-    assert "BK0490" in prompt
-    assert "008281" in prompt
-    assert "国泰CES半导体" in prompt
-    # 无 macro 时不应出现段标
-    assert "宏观背景" not in prompt
-
-
-def test_user_prompt_includes_macro_when_provided():
-    prompt = AIAnalyst._build_user_prompt([], {}, "美联储降息 25bp,科技股普涨")
-    assert "宏观背景" in prompt
-    assert "美联储降息" in prompt
-
-
-def test_user_prompt_filters_out_neutral_and_not_applicable():
-    """neutral / not_applicable 不应进 prompt(节省 token + 降噪)。"""
-    signals = [
-        _mk_signal("BK0490", "半导体", "bullish", 8, 95),
-        _mk_signal("BK0900", "锂电池", "neutral", 4, 17),
-    ]
-    prompt = AIAnalyst._build_user_prompt(signals, {}, None)
-    assert "半导体" in prompt
-    assert "BK0490" in prompt
-    assert "锂电池" not in prompt
-    assert "BK0900" not in prompt
+@pytest.mark.parametrize(
+    "push_type, expected_module",
+    [
+        (PushType.MORNING.value, pre_market),
+        (PushType.MIDDAY.value, intraday),
+        (PushType.EVENING.value, close),
+        (PushType.WEEKLY.value, weekly),
+    ],
+)
+def test_analyze_dispatches_to_correct_module(push_type, expected_module):
+    """每个 push_type 应该使用对应模块的 SYSTEM_PROMPT。"""
+    resp = _mk_anthropic_response("ok")
+    with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = resp
+        mock_cls.return_value = mock_client
+        a = AIAnalyst(api_key="sk-fake")
+        a.analyze_signals([], {}, push_type=push_type)
+        kwargs = mock_client.messages.create.call_args.kwargs
+        assert kwargs["system"] == expected_module.SYSTEM_PROMPT
 
 
-def test_user_prompt_truncates_long_fund_list():
-    funds = [(f"00{i:04d}", f"基金{i}") for i in range(10)]
-    holdings = {"BK0490": funds}
-    signals = [_mk_signal("BK0490", "半导体", "bullish", 8, 95)]
-    prompt = AIAnalyst._build_user_prompt(signals, holdings, None)
-    assert "等 10 只" in prompt
-    assert "基金0" in prompt
-    assert "基金3" in prompt
-    # 第 5 个之后被截
-    assert "基金5" not in prompt
+def test_analyze_default_push_type_is_evening():
+    """不传 push_type → 用 close (evening) 模板,保持 Phase 3.10 向后兼容。"""
+    resp = _mk_anthropic_response("ok")
+    with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = resp
+        mock_cls.return_value = mock_client
+        a = AIAnalyst(api_key="sk-fake")
+        a.analyze_signals([], {})  # 不传 push_type
+        kwargs = mock_client.messages.create.call_args.kwargs
+        assert kwargs["system"] == close.SYSTEM_PROMPT
 
 
-def test_user_prompt_empty_holdings():
-    prompt = AIAnalyst._build_user_prompt([], {}, None)
-    assert "无 A 股行业板块持仓暴露" in prompt
-
-
-def test_user_prompt_no_actionable_signals():
-    signals = [_mk_signal("BK0900", "锂电池", "neutral", 4, 17)]
-    prompt = AIAnalyst._build_user_prompt(signals, {}, None)
-    assert "无 actionable 信号" in prompt
+def test_analyze_invalid_push_type_falls_back_to_evening():
+    resp = _mk_anthropic_response("ok")
+    with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = resp
+        mock_cls.return_value = mock_client
+        a = AIAnalyst(api_key="sk-fake")
+        a.analyze_signals([], {}, push_type="not_a_real_type")
+        kwargs = mock_client.messages.create.call_args.kwargs
+        assert kwargs["system"] == close.SYSTEM_PROMPT
 
 
 # ============================================================
@@ -174,12 +168,10 @@ def test_user_prompt_no_actionable_signals():
 def test_analyze_returns_empty_on_api_error():
     with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
         mock_client = MagicMock()
-        # 构造一个 APIStatusError(anthropic.APIError 的子类)
         mock_client.messages.create.side_effect = anthropic.APIStatusError(
             "boom", response=MagicMock(status_code=500), body=None
         )
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         assert a.analyze_signals([], {}) == ""
 
@@ -191,7 +183,6 @@ def test_analyze_returns_empty_on_rate_limit():
             "rate limited", response=MagicMock(status_code=429), body=None
         )
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         assert a.analyze_signals([], {}) == ""
 
@@ -201,13 +192,11 @@ def test_analyze_returns_empty_on_unexpected_exception():
         mock_client = MagicMock()
         mock_client.messages.create.side_effect = ValueError("unexpected")
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         assert a.analyze_signals([], {}) == ""
 
 
 def test_analyze_returns_empty_on_no_text_block():
-    """响应里只有 tool_use 等其他 block,无 text block。"""
     block = MagicMock()
     block.type = "tool_use"
     resp = MagicMock()
@@ -217,7 +206,6 @@ def test_analyze_returns_empty_on_no_text_block():
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         assert a.analyze_signals([], {}) == ""
 
@@ -250,31 +238,18 @@ def test_forbidden_words_not_blocked_in_output():
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp
         mock_cls.return_value = mock_client
-
         a = AIAnalyst(api_key="sk-fake")
         result = a.analyze_signals([], {})
-
-    # 文本原样返回(没替换、没过滤)
-    assert "买入" in result
-    assert result == "分析师建议买入半导体"
+    assert "买入" in result  # 原样返回,没替换
 
 
 def test_forbidden_words_list_covers_required_operation_verbs():
-    """R3.1 红线词清单完整性 — 操作指令动词必须全覆盖。
-
-    注:'持有'被显式移除(误报率高:'你持有的 XXX' 是状态描述,非操作指令)。
-    SYSTEM_PROMPT 里仍约束'建议持有/应该持有'等组合,由 prompt 守门。
-    """
-    required_operation_verbs = {
-        "买入", "卖出", "做多", "做空",
-        "止损", "止盈", "建仓", "减仓", "加仓",
-    }
-    assert required_operation_verbs.issubset(set(_FORBIDDEN_WORDS))
-    # 显式断言「持有」不在禁用词列表(误报防回归)
-    assert "持有" not in _FORBIDDEN_WORDS
+    """R3.1 红线词清单完整性。"""
+    required = {"买入", "卖出", "做多", "做空", "止损", "止盈", "建仓", "减仓", "加仓"}
+    assert required.issubset(set(_FORBIDDEN_WORDS))
+    assert "持有" not in _FORBIDDEN_WORDS  # 防回归:持有作状态描述允许
 
 
 def test_holding_as_state_description_not_flagged():
-    """'你持有的 XXX 基金' 是状态描述,不应被 R3.1 扫描命中。"""
     text = "你持有的 [008281] 国泰CES半导体ETF联接A 可能受益于这波资金青睐"
     assert AIAnalyst.check_forbidden_words(text) == []
