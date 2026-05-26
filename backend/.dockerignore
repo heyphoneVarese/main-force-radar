@@ -1,0 +1,32 @@
+# Phase 4.12 - 别把这些塞进镜像
+
+# Python venv / 缓存
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# 秘密 — 不要打进镜像,docker-compose 用 env_file 在 runtime 注入
+.env
+.env.*
+
+# 测试 — prod 镜像不需要(CI/CD 之外不跑测试)
+tests/
+
+# 本地 SQLite 数据 — host volume 挂载,不打镜像
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# 杂项
+.DS_Store
+*.log

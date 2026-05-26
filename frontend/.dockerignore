@@ -1,0 +1,20 @@
+# Phase 4.12 - 别把这些塞进 node 阶段构建上下文
+
+# 依赖目录(镜像里会 npm ci 重建)
+node_modules/
+
+# 上次构建产物
+dist/
+dist-ssr/
+
+# 秘密 / 本地配置
+.env
+.env.*
+*.local
+
+# Vite 缓存
+.vite/
+
+# 杂项
+.DS_Store
+*.log

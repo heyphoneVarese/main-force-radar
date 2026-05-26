@@ -1,0 +1,54 @@
+# Phase 4.12 - 单机部署 (阿里云 2C2G Ubuntu 22.04)
+#
+# 跑法(VPS 上):
+#   git clone https://github.com/heyphoneVarese/main-force-radar.git
+#   cd main-force-radar
+#   cp .env.example backend/.env
+#   vi backend/.env   # 填 ANTHROPIC_API_KEY / SERVER_CHAN_SCKEY,改 SCHEDULER_ENABLED=true
+#   docker compose up -d --build
+#
+# 首次初始化 DB + 种子:
+#   docker compose exec backend uv run python -m scripts.init_db
+#   docker compose exec backend uv run python -m scripts.seed_funds
+#   docker compose exec backend uv run python -m scripts.import_my_holdings
+#
+# 浏览器访问 http://VPS_PUBLIC_IP/  (走 nginx → 静态 + /api 反代到 backend)
+# 阿里云安全组只需开 80(SSH 22 默认开;8000 不必对公网开)。
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: mfr-backend:latest
+    container_name: mfr-backend
+    ports:
+      # 暴露 8000 仅本机可达(健康检查 / 排查);如果不想暴露可去掉
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # 覆盖 .env 里的 DATABASE_URL — Docker 里 SQLite 必须落到 host volume
+      # 否则容器删了数据没了。4 个斜杠 = 绝对路径
+      DATABASE_URL: sqlite:////app/data/main_force_radar.db
+    volumes:
+      # SQLite 持久化:host 的 ./backend/data 挂到容器 /app/data
+      # init_db 跑完后,main_force_radar.db 会落在 host 的 backend/data/ 下
+      - ./backend/data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: mfr-frontend:latest
+    container_name: mfr-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      # 只等容器启动,不等健康(MVP 简化;backend 没 ready 时 fetch 会失败,刷新即可)
+      - backend
+    restart: unless-stopped
+
+# docker-compose 默认创建一个 bridge 网络,服务名(backend / frontend)互相 DNS 可达。
+# nginx 反代 /api → http://backend:8000/api/ 就是走这个网络。
