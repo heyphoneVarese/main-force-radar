@@ -1,6 +1,7 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 from src.models import Fund
+from src.utils.date_helper import cn_today
 
 
 def _ensure_fund(db_session, code="110011", name="测试基金", ftype="混合型"):
@@ -71,7 +72,9 @@ def test_post_holding_zero_shares_returns_422(client, db_session):
 def test_post_holding_bought_at_future_returns_422(client, db_session):
     _ensure_fund(db_session)
     payload = _payload()
-    payload["bought_at"] = str(date.today() + timedelta(days=1))
+    # 用 cn_today() 而非 date.today(),保证跨时区机器上测试稳定
+    # (validator 用的就是 cn_today)
+    payload["bought_at"] = str(cn_today() + timedelta(days=1))
     resp = client.post("/api/holdings", json=payload)
     assert resp.status_code == 422
 

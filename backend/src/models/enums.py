@@ -11,6 +11,8 @@ class SignalType(StrEnum):
     BULLISH = "bullish"
     BEARISH = "bearish"
     WARNING = "warning"
+    NEUTRAL = "neutral"
+    NOT_APPLICABLE = "not_applicable"  # 基金未映射到 A 股板块(QDII / 指数 / 债基)
 
 
 class TargetType(StrEnum):
