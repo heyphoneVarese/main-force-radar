@@ -81,8 +81,11 @@ class ServerChanNotifier:
         signals: list[Signal],
         holdings_by_sector: dict[str, list[tuple[str, str]]] | None = None,
         as_of: date | None = None,
+        ai_analysis: str | None = None,
     ) -> bool:
-        title, content = self.build_summary_markdown(signals, holdings_by_sector, as_of)
+        title, content = self.build_summary_markdown(
+            signals, holdings_by_sector, as_of, ai_analysis
+        )
         return self.send(title, content)
 
     @staticmethod
@@ -90,9 +93,11 @@ class ServerChanNotifier:
         signals: list[Signal],
         holdings_by_sector: dict[str, list[tuple[str, str]]] | None = None,
         as_of: date | None = None,
+        ai_analysis: str | None = None,
     ) -> tuple[str, str]:
         """渲染 Markdown,返回 (title, desp)。
         holdings_by_sector: sector_code → [(fund_code, fund_name), ...]
+        ai_analysis:        Phase 3.10 — Claude 生成的 markdown 分析,非空则插入「AI 分析师视角」段
         """
         as_of = as_of or cn_today()
         holdings_by_sector = holdings_by_sector or {}
@@ -108,6 +113,16 @@ class ServerChanNotifier:
 
         # 正文
         lines: list[str] = []
+
+        # Phase 3.10:AI 分析师视角(可选,排在最前)
+        if ai_analysis and ai_analysis.strip():
+            lines.append("## 🤖 AI 分析师视角")
+            lines.append("")
+            lines.append(ai_analysis.strip())
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
         lines.append(f"### 今日板块信号 ({as_of.isoformat()})")
         lines.append("")
         lines.append(

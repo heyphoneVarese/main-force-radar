@@ -214,6 +214,44 @@ def test_markdown_sorts_by_score_desc():
     assert idx_b < idx_c < idx_a, "应按 score 降序排"
 
 
+def test_markdown_includes_ai_analysis_when_provided():
+    """Phase 3.10: 传 ai_analysis 应渲染「🤖 AI 分析师视角」段在最前。"""
+    signals = [_mk_signal("BK0490", "半导体", "bullish", 8, 95)]
+    ai_text = "## 主线\n今日半导体强势 ...\n\n工具只给信号,操作你定。"
+    _, content = ServerChanNotifier.build_summary_markdown(
+        signals, ai_analysis=ai_text, as_of=date(2026, 5, 27)
+    )
+    assert "🤖 AI 分析师视角" in content
+    assert "今日半导体强势" in content
+    # AI 段应该排在信号段之前
+    assert content.index("🤖") < content.index("今日板块信号")
+
+
+def test_markdown_no_ai_section_when_ai_analysis_empty():
+    """ai_analysis 为空字符串/None → 不渲染 AI 段(向后兼容)。"""
+    signals = [_mk_signal("BK0490", "半导体", "bullish", 8, 95)]
+    _, content_empty = ServerChanNotifier.build_summary_markdown(
+        signals, ai_analysis="", as_of=date(2026, 5, 27)
+    )
+    _, content_none = ServerChanNotifier.build_summary_markdown(
+        signals, ai_analysis=None, as_of=date(2026, 5, 27)
+    )
+    assert "🤖" not in content_empty
+    assert "🤖" not in content_none
+    # 仍然有信号段
+    assert "半导体" in content_empty
+
+
+def test_markdown_no_ai_section_when_only_whitespace():
+    """空白字符串应视同未提供。"""
+    _, content = ServerChanNotifier.build_summary_markdown(
+        signals=[_mk_signal("BK0490", "半导体", "bullish", 8, 95)],
+        ai_analysis="   \n  \n  ",
+        as_of=date(2026, 5, 27),
+    )
+    assert "🤖" not in content
+
+
 def test_markdown_footer_present():
     _, content = ServerChanNotifier.build_summary_markdown(
         signals=[_mk_signal("BK0490", "半导体", "bullish", 8, 95)],
