@@ -16,6 +16,11 @@
 
 FROM python:3.11-slim
 
+# PIP_INDEX_URL 必须在第一个 RUN pip 之前 ENV 进去,否则 pip 还走默认 PyPI。
+# 国内 VPS 直连 pypi.org 经常 54s+ 后失败("No matching distribution found"
+# 实际是网络挂死,pip 误报无版本)。阿里镜像基本同步,字节级一致。
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
 # uv 装得最稳的方式 — pip 比 COPY --from 兼容性好
 # 牺牲 10-20s 构建时间,换零踩坑风险
 RUN pip install --no-cache-dir uv==0.5.11
