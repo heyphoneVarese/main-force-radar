@@ -20,15 +20,27 @@ FROM python:3.11-slim
 # 牺牲 10-20s 构建时间,换零踩坑风险
 RUN pip install --no-cache-dir uv==0.5.11
 
-# UV_FROZEN=1 关键:禁止 runtime 偷偷改 lockfile / 重新下依赖。
-# 否则容器启动时 uv run 会"补齐"dev 组(black/pytest/ruff),
-# 国内 VPS 网络 30s 超时 → uvicorn 起不来 → docker logs 空白。
-# (Dockerfile 续行 \ 之间不能塞 # 注释,Docker 会当 ENV 值,所以放这上面)
+# ENV 关键变量说明(Dockerfile 续行 \ 之间不能塞 # 注释,Docker 会当 ENV 值)
+#
+# UV_FROZEN=1
+#   禁止 runtime 偷偷改 lockfile / 重新下依赖。否则容器启动时 uv run 会
+#   "补齐"dev 组(black/pytest/ruff),撞超时 → uvicorn 起不来。
+#
+# UV_HTTP_TIMEOUT=120
+#   默认 30s 在国内 VPS 拉 pandas/scipy/akshare 这种大包必超时。
+#   抬到 120s 给慢网兜底(本机走代理也吃得消)。
+#
+# UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+#   走阿里云镜像,跟阿里云 VPS 内网,延迟通常 < 50ms。同步 PyPI 上游,
+#   字节级一致 → uv.lock 里的 sha256 仍应匹配。
+#   若极少数情况 mirror 滞后导致 hash mismatch,处理方式见 commit message。
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    UV_FROZEN=1
+    UV_FROZEN=1 \
+    UV_HTTP_TIMEOUT=120 \
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 
 WORKDIR /app
 
