@@ -186,3 +186,157 @@ def test_retry_attempts_exactly_3_times_then_returns_fallback():
 
     assert rows == []
     assert mock.call_count == 3
+
+
+# =====================================================================
+# fetch_and_store_today + insert helpers(Phase 4.x daily_fetch 用)
+# =====================================================================
+
+from datetime import date as _date
+
+
+def _mk_sector_row(sector_code: str, name: str, inflow_yi: float, change_pct: float):
+    """构造一个 sector_flow_daily 入库 dict。"""
+    return {
+        "trade_date": _date(2026, 5, 27),
+        "sector_code": sector_code,
+        "sector_name": name,
+        "sector_type": "industry",
+        "main_inflow_wan_x10000": int(inflow_yi * 10_000 * 10_000),
+        "main_inflow_pct_x10000": None,
+        "change_pct_x10000": int(change_pct * 10_000),
+    }
+
+
+def _mk_index_row(code: str):
+    """构造一个 market_index_daily 入库 dict(fetcher 默认 index_name=code 占位)。"""
+    return {
+        "index_code": code,
+        "index_name": code,
+        "trade_date": _date(2026, 5, 27),
+        "close_x10000": 41129000,
+        "change_pct_x10000": 87,
+        "turnover_wan_x10000": None,
+    }
+
+
+def test_insert_sector_flow_rows_inserts_new(db_session):
+    rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    n = df_mod.insert_sector_flow_rows(db_session, rows)
+    assert n == 1
+
+
+def test_insert_sector_flow_rows_skips_existing(db_session):
+    rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    df_mod.insert_sector_flow_rows(db_session, rows)
+    # 同一 (trade_date, sector_code) 再插一次,应跳过
+    n2 = df_mod.insert_sector_flow_rows(db_session, rows)
+    assert n2 == 0
+
+
+def test_insert_market_index_rows_overrides_name(db_session):
+    rows = [_mk_index_row("sh000001")]
+    df_mod.insert_market_index_rows(db_session, rows, index_name="上证指数")
+    # 查回来确认 index_name 被覆盖
+    from src.models import MarketIndexDaily
+    row = db_session.query(MarketIndexDaily).filter_by(index_code="sh000001").first()
+    assert row.index_name == "上证指数"
+
+
+def test_insert_market_index_rows_skips_existing(db_session):
+    rows = [_mk_index_row("sh000001")]
+    df_mod.insert_market_index_rows(db_session, rows)
+    n2 = df_mod.insert_market_index_rows(db_session, rows)
+    assert n2 == 0
+
+
+def test_fetch_and_store_today_orchestrates_sector_plus_4_indices(db_session):
+    """fetch_and_store_today 应:1 次 sector 采集 + 4 次 index 采集,统计正确。"""
+    sector_rows = [
+        _mk_sector_row("BK0490", "半导体", 95.0, 0.0234),
+        _mk_sector_row("BK0727", "5G概念", -150.0, -0.0300),
+    ]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ) as mock_idx:
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert stats["sectors_fetched"] == 2
+    assert stats["sectors_inserted"] == 2
+    # 4 个市场指数都被调到
+    assert mock_idx.call_count == 4
+    assert stats["indices_fetched"] == 4
+    assert stats["indices_inserted"] == 4
+    assert stats["errors"] == []
+
+
+def test_fetch_and_store_today_idempotent(db_session):
+    """跑两次,第二次都跳过(已入库 = 不重复)。"""
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ):
+        stats1 = df_mod.fetch_and_store_today(db_session)
+        stats2 = df_mod.fetch_and_store_today(db_session)
+
+    assert stats1["sectors_inserted"] == 1
+    assert stats1["indices_inserted"] == 4
+    # 第二次完全跳过
+    assert stats2["sectors_inserted"] == 0
+    assert stats2["indices_inserted"] == 0
+
+
+def test_fetch_and_store_today_continues_on_sector_fetch_failure(db_session):
+    """sector fetch 抛 → 不影响 indices 采集。"""
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        side_effect=RuntimeError("akshare timeout"),
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert stats["sectors_inserted"] == 0
+    assert stats["indices_inserted"] == 4  # 仍跑了 4 个指数
+    assert len(stats["errors"]) == 1
+    assert "sector_flow_industry" in stats["errors"][0]
+
+
+def test_fetch_and_store_today_continues_on_single_index_failure(db_session):
+    """1 个指数失败 → 其他 3 个继续。"""
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+
+    def _index_side(code: str):
+        if code == "sz399006":  # 创业板挂掉
+            raise ConnectionError("network down")
+        return [_mk_index_row(code)]
+
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=_index_side,
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert stats["sectors_inserted"] == 1
+    assert stats["indices_inserted"] == 3  # 4 - 1 失败 = 3
+    assert len(stats["errors"]) == 1
+    assert "sz399006" in stats["errors"][0]
+
+
+def test_default_indices_list_size():
+    """DEFAULT_INDICES 应该是 4 个(上证/深成/创业板/沪深300)。"""
+    assert len(df_mod.DEFAULT_INDICES) == 4
+    codes = [c for c, _ in df_mod.DEFAULT_INDICES]
+    assert set(codes) == {"sh000001", "sz399001", "sz399006", "sh000300"}

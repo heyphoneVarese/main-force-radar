@@ -32,9 +32,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--job",
-        choices=[c["job_id"] for c in JOBS_CONFIG] + ["all"],
+        choices=[c["job_id"] for c in JOBS_CONFIG] + ["daily_fetch", "all"],
         default="all",
-        help="指定要跑的 job(默认 all = 4 个全跑)",
+        help="指定要跑的 job(默认 all = 4 个推送 job;daily_fetch 单独触发)",
     )
     args = parser.parse_args()
 
@@ -44,6 +44,18 @@ def main() -> None:
     )
 
     sched = SignalScheduler()
+
+    # daily_fetch 是采集 job,不发推送,单独处理
+    if args.job == "daily_fetch":
+        if args.mock:
+            print("⚠️  daily_fetch 不支持 --mock(它只采集 akshare,不推送),直接跑真采集")
+        print("\n" + "=" * 72)
+        print("触发 job: daily_fetch (data collection, no push)")
+        print("=" * 72)
+        sched._run_fetch_job()
+        print("\ntest_scheduler 完成")
+        return
+
     targets = (
         JOBS_CONFIG
         if args.job == "all"

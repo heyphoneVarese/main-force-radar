@@ -30,6 +30,7 @@ from src.config import settings
 from src.db import SessionLocal
 from src.models.enums import PushType
 from src.services.ai_analyst import AIAnalyst
+from src.services.data_fetcher import fetch_and_store_today
 from src.services.holdings_summary import build_holdings_by_sector
 from src.services.notifier import ServerChanNotifier
 from src.services.push_log import write_push_log
@@ -79,13 +80,14 @@ class SignalScheduler:
         self.scheduler: BackgroundScheduler = BackgroundScheduler(timezone=timezone)
 
     def register_jobs(self) -> None:
-        """把 4 个 job 注册到内部 scheduler。
+        """注册 4 个 push job + 1 个 daily_fetch job(共 5 个)。
 
         ⚠️ 注意:scheduler 未启动时,APScheduler 的 add_job 会把任务放进
         pending list 而非按 ID 索引,此时 replace_existing=True 不会去重。
         生产里 lifespan 只 call 一次,不会撞到这个 quirk;但**别在 start()
         之前重复调用本方法**。
         """
+        # 4 个推送 job(JOBS_CONFIG)
         for config in JOBS_CONFIG:
             trigger = CronTrigger(timezone=self.timezone, **config["cron"])
             self.scheduler.add_job(
@@ -100,6 +102,51 @@ class SignalScheduler:
             logger.info(
                 "Registered job: id=%s push_type=%s cron=%s",
                 config["job_id"], config["push_type"], config["cron"],
+            )
+
+        # 1 个数据采集 job(15:20 mon-fri,排在 close 推送 15:30 之前 10 分钟)
+        # 注意:cron 用 mon-fri 不能跳 A 股节假日(春节等)。
+        #     节假日那天会触发,但 akshare 返回空 / 旧数据,
+        #     insert_*_rows 幂等保证不重复入库。引入节假日 lib 违反 R6,不做。
+        fetch_cron = {"hour": 15, "minute": 20, "day_of_week": "mon-fri"}
+        self.scheduler.add_job(
+            func=self._make_fetch_callable(),
+            trigger=CronTrigger(timezone=self.timezone, **fetch_cron),
+            id="daily_fetch",
+            name="每日数据采集",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+        logger.info(
+            "Registered job: id=daily_fetch (data collection) cron=%s",
+            fetch_cron,
+        )
+
+    def _make_fetch_callable(self) -> Callable[[], None]:
+        """daily_fetch 顶级吞掉异常 — 跟 push job 同样的安全契约。"""
+        def _run():
+            try:
+                self._run_fetch_job()
+            except Exception as e:
+                logger.error(
+                    "Job daily_fetch 顶级异常吞掉: %s: %s",
+                    type(e).__name__, e,
+                )
+
+        return _run
+
+    def _run_fetch_job(self) -> None:
+        """采集今日板块资金流 + 4 大指数,幂等入库。"""
+        logger.info("Job [daily_fetch] 开始执行")
+        try:
+            with SessionLocal() as session:
+                stats = fetch_and_store_today(session)
+            logger.info("Job [daily_fetch] 完成: %s", stats)
+        except Exception as e:
+            logger.error(
+                "Job [daily_fetch] 内部失败但已吞掉: %s: %s",
+                type(e).__name__, e,
             )
 
     def _make_job_callable(self, config: dict) -> Callable[[], None]:

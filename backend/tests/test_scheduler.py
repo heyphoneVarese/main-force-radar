@@ -61,10 +61,14 @@ def test_jobs_config_every_job_has_required_fields():
 # ============================================================
 
 
-def test_register_jobs_registers_4_jobs():
+def test_register_jobs_registers_5_jobs():
+    """4 个推送 job + 1 个 daily_fetch 采集 job = 5 个。"""
     s = SignalScheduler()
     s.register_jobs()
-    assert len(s.scheduler.get_jobs()) == 4
+    assert len(s.scheduler.get_jobs()) == 5
+    # 5 个 job 的 id 全部到位
+    job_ids = {job.id for job in s.scheduler.get_jobs()}
+    assert job_ids == {"pre_market", "intraday", "close", "weekly", "daily_fetch"}
 
 
 def test_default_timezone_is_asia_shanghai():
@@ -89,7 +93,7 @@ def test_register_jobs_after_start_is_idempotent():
     s.start()
     try:
         s.register_jobs()  # 这次走真去重
-        assert len(s.scheduler.get_jobs()) == 4
+        assert len(s.scheduler.get_jobs()) == 5
     finally:
         s.shutdown()
 
@@ -315,3 +319,76 @@ def test_start_then_shutdown():
 def test_shutdown_when_not_started_is_noop():
     s = SignalScheduler()
     s.shutdown()  # 不应抛
+
+
+# ============================================================
+# daily_fetch job
+# ============================================================
+
+
+def test_daily_fetch_job_registered():
+    s = SignalScheduler()
+    s.register_jobs()
+    job = s.scheduler.get_job("daily_fetch")
+    assert job is not None
+    assert job.name == "每日数据采集"
+
+
+def test_daily_fetch_cron_is_15_20_mon_fri():
+    """15:20 mon-fri,排在 close 推送 15:30 之前 10 分钟。"""
+    s = SignalScheduler()
+    s.register_jobs()
+    job = s.scheduler.get_job("daily_fetch")
+    monday = datetime(2026, 5, 25, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    next_fire = job.trigger.get_next_fire_time(None, monday)
+    assert next_fire is not None
+    assert next_fire.hour == 15
+    assert next_fire.minute == 20
+    assert next_fire.weekday() in {0, 1, 2, 3, 4}  # mon-fri
+
+
+def test_daily_fetch_skips_weekend():
+    s = SignalScheduler()
+    s.register_jobs()
+    job = s.scheduler.get_job("daily_fetch")
+    saturday = datetime(2026, 5, 23, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    next_fire = job.trigger.get_next_fire_time(None, saturday)
+    assert next_fire.weekday() == 0  # Monday
+
+
+def test_daily_fetch_uses_asia_shanghai():
+    s = SignalScheduler()
+    s.register_jobs()
+    job = s.scheduler.get_job("daily_fetch")
+    assert str(job.trigger.timezone) == "Asia/Shanghai"
+
+
+def test_run_fetch_job_calls_fetch_and_store_today():
+    """_run_fetch_job 应该 call fetch_and_store_today 服务函数。"""
+    s = SignalScheduler()
+    with patch("src.services.scheduler.fetch_and_store_today") as mock_fetch:
+        mock_fetch.return_value = {
+            "sectors_fetched": 80, "sectors_inserted": 80,
+            "indices_fetched": 4, "indices_inserted": 4, "errors": [],
+        }
+        s._run_fetch_job()
+    assert mock_fetch.called
+
+
+def test_run_fetch_job_swallows_exception():
+    """采集失败不应让 scheduler 崩 — 跟 push job 同样契约。"""
+    s = SignalScheduler()
+    with patch(
+        "src.services.scheduler.fetch_and_store_today",
+        side_effect=RuntimeError("akshare 挂了"),
+    ):
+        # 直接调内层不应抛(内层吞)
+        s._run_fetch_job()
+
+
+def test_make_fetch_callable_swallows_top_level_exception():
+    """顶层 callable 兜底:即便 _run_fetch_job 抛(理论上不会)也吞掉。"""
+    s = SignalScheduler()
+    with patch.object(s, "_run_fetch_job", side_effect=ValueError("boom")):
+        callable_ = s._make_fetch_callable()
+        callable_()  # 不应抛

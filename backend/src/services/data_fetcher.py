@@ -17,7 +17,9 @@ from typing import Any, Callable, TypeVar
 
 import akshare as ak
 import pandas as pd
+from sqlalchemy.orm import Session
 
+from src.models import MarketIndexDaily, SectorFlowDaily
 from src.utils.date_helper import cn_today
 from src.utils.money import nav_to_int, pct_to_int, wan_yuan_to_int
 
@@ -277,3 +279,114 @@ def fetch_fund_holdings(code: str, year: str | None = None) -> list[dict[str, An
     except Exception as e:
         logger.warning("skip %s parse: %s", label, e)
         return []
+
+
+# =====================================================================
+# 入库 helper + 定时采集编排(Phase 4.x daily_fetch job 用)
+# =====================================================================
+
+# 默认采集的 4 个市场指数(与 scripts/fetch_today.py 一致)
+DEFAULT_INDICES: list[tuple[str, str]] = [
+    ("sh000001", "上证指数"),
+    ("sz399001", "深证成指"),
+    ("sz399006", "创业板指"),
+    ("sh000300", "沪深300"),
+]
+
+
+def insert_sector_flow_rows(session: Session, rows: list[dict[str, Any]]) -> int:
+    """幂等入库:(trade_date, sector_code) 已存在则跳过。返回新插入行数。"""
+    inserted = 0
+    for row in rows:
+        exists = (
+            session.query(SectorFlowDaily)
+            .filter_by(trade_date=row["trade_date"], sector_code=row["sector_code"])
+            .first()
+        )
+        if exists:
+            continue
+        session.add(SectorFlowDaily(**row))
+        inserted += 1
+    session.commit()
+    return inserted
+
+
+def insert_market_index_rows(
+    session: Session,
+    rows: list[dict[str, Any]],
+    index_name: str | None = None,
+) -> int:
+    """幂等入库:(index_code, trade_date) 已存在则跳过。返回新插入行数。
+
+    index_name 非 None 时覆盖 row['index_name'](fetcher 默认用 code 占位)。
+    """
+    inserted = 0
+    for row in rows:
+        if index_name:
+            row["index_name"] = index_name
+        exists = (
+            session.query(MarketIndexDaily)
+            .filter_by(index_code=row["index_code"], trade_date=row["trade_date"])
+            .first()
+        )
+        if exists:
+            continue
+        session.add(MarketIndexDaily(**row))
+        inserted += 1
+    session.commit()
+    return inserted
+
+
+def fetch_and_store_today(session: Session) -> dict[str, int]:
+    """收盘后采集今日板块资金流 + 4 大指数,幂等入库。
+
+    流程:
+      1. fetch_sector_flow_industry() → sector_flow_daily(UNIQUE 去重)
+      2. 4 个市场指数各自 fetch_market_index(code) → market_index_daily(UNIQUE 去重)
+
+    任何一项 fetcher 失败时,已就位 try-except + 重试 3 次后返回空列表,
+    不抛异常给上层,其他项继续执行(R2 数据快照原则 — 拿不到就算了,
+    幂等可补)。
+
+    返回:统计字典 {sectors_fetched, sectors_inserted, indices_fetched,
+    indices_inserted, errors}。errors 是字符串列表,记录哪些项失败了。
+    """
+    stats: dict[str, Any] = {
+        "sectors_fetched": 0,
+        "sectors_inserted": 0,
+        "indices_fetched": 0,
+        "indices_inserted": 0,
+        "errors": [],
+    }
+
+    # 1. 行业资金流
+    try:
+        sector_rows = fetch_sector_flow_industry()
+        stats["sectors_fetched"] = len(sector_rows)
+        if sector_rows:
+            stats["sectors_inserted"] = insert_sector_flow_rows(session, sector_rows)
+        logger.info(
+            "fetch_and_store_today: sector_flow_industry fetched=%d inserted=%d",
+            stats["sectors_fetched"], stats["sectors_inserted"],
+        )
+    except Exception as e:
+        msg = f"sector_flow_industry: {type(e).__name__}: {e}"
+        logger.error("fetch_and_store_today: %s", msg)
+        stats["errors"].append(msg)
+
+    # 2. 4 大市场指数
+    for code, name in DEFAULT_INDICES:
+        try:
+            index_rows = fetch_market_index(code)
+            stats["indices_fetched"] += len(index_rows)
+            if index_rows:
+                stats["indices_inserted"] += insert_market_index_rows(
+                    session, index_rows, index_name=name
+                )
+        except Exception as e:
+            msg = f"market_index[{code}/{name}]: {type(e).__name__}: {e}"
+            logger.error("fetch_and_store_today: %s", msg)
+            stats["errors"].append(msg)
+
+    logger.info("fetch_and_store_today done: %s", stats)
+    return stats
