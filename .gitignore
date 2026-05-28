@@ -20,6 +20,7 @@ dist-ssr/
 .env
 .env.local
 .env.*.local
+.env.backup
 
 # Database (dev SQLite files)
 *.db
