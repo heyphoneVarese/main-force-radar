@@ -39,13 +39,22 @@ RUN pip install --no-cache-dir uv==0.5.11
 #   走阿里云镜像,跟阿里云 VPS 内网,延迟通常 < 50ms。同步 PyPI 上游,
 #   字节级一致 → uv.lock 里的 sha256 仍应匹配。
 #   若极少数情况 mirror 滞后导致 hash mismatch,处理方式见 commit message。
+#
+# UV_CONCURRENT_DOWNLOADS=1
+#   关键修复(2026-05-28 诊断):VPS 到阿里源单包 h11 实测 0.1s,
+#   网络飞快;但 uv 默认高并发(~8)同时下 + 解压几个大包(pandas/
+#   scipy/akshare),2C2G 内存 + CPU 直接被挤爆,表现为"假性超时"
+#   ——其实不是网络慢,是机器扛不住并发负载。
+#   串行下载(1 个一个来)让小机器从容,慢一点但稳。
+#   build 阶段一次性慢 5-10 min 不痛(layer 缓存命中后 0 成本)。
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_FROZEN=1 \
     UV_HTTP_TIMEOUT=120 \
-    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
+    UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
+    UV_CONCURRENT_DOWNLOADS=1
 
 WORKDIR /app
 
