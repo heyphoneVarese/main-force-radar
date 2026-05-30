@@ -8,15 +8,26 @@
 
 注意:akshare 各接口的列名/单位会随版本变化。本模块对常见列名做了 fallback,
 若实际返回结构差异较大,需根据日志中 'skip ... row' 的内容定位并调整。
+
+【2026-05-30 直连东财】 VPS 上 akshare.stock_sector_fund_flow_rank 报
+RemoteDisconnected / ConnectionResetError。根因三条叠加:
+  1. akshare 内部写死的 UA 是 Chrome 81(2020),东财对老 UA 直接 reset
+  2. 没 Referer 头
+  3. push2.eastmoney.com 收盘后 302 → push2delay.eastmoney.com,
+     keep-alive 连接在阿里云 NAT 后会被东财半开 reset
+本模块自己直连东财 push2 API(_fetch_sector_flow_direct),失败时再 fallback
+到 akshare(双保险)。
 """
 
 import logging
+import random
 import time
 from datetime import date, datetime
 from typing import Any, Callable, TypeVar
 
 import akshare as ak
 import pandas as pd
+import requests
 from sqlalchemy.orm import Session
 
 from src.models import MarketIndexDaily, SectorFlowDaily
@@ -29,6 +40,32 @@ T = TypeVar("T")
 
 RETRY_TIMES: int = 3
 RETRY_DELAY_SEC: float = 2.0
+
+# =====================================================================
+# 直连东财配置(绕过 akshare 老 UA / 无 Referer 的坑)
+# =====================================================================
+EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+# 现代 UA(akshare 写死的 Chrome 81 已经被东财风控)
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+EASTMONEY_REFERER = "https://data.eastmoney.com/bkzj/hy.html"
+# ak_sector_type → 东财 fs 参数中的 t: 编号
+_SECTOR_TYPE_T_MAP = {
+    "行业资金流": "2",
+    "概念资金流": "3",
+    "地域资金流": "1",
+}
+# 直连只实现"今日"(R6 不过度设计;其他 indicator 通过 fallback 走 akshare)
+_DIRECT_SUPPORTED_INDICATOR = "今日"
+# 单页 100 条,够 500+ 板块拆 5-6 页
+_DIRECT_PAGE_SIZE = 100
+# 页间随机 sleep(秒),avoid 东财速率风控
+_DIRECT_SLEEP_MIN_SEC: float = 0.4
+_DIRECT_SLEEP_MAX_SEC: float = 1.2
+# 单次 HTTP 超时
+_DIRECT_HTTP_TIMEOUT_SEC: float = 10.0
 
 
 def _with_retry(label: str, fn: Callable[[], T], fallback: T) -> T:
@@ -71,6 +108,122 @@ def _safe_float(value: Any) -> float | None:
 # =====================================================================
 
 
+def _direct_get_one_page(
+    params: dict[str, Any], session: requests.Session
+) -> dict[str, Any]:
+    """直连东财抓一页。任何异常抛出去,由调用方 retry/fallback。
+
+    单独抽出来方便 mock。返回 data_json["data"](含 total 和 diff 两个键)。
+    """
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Referer": EASTMONEY_REFERER,
+        "Accept": "*/*",
+        # 关键:Connection: close 避免阿里云 NAT 后 keep-alive 被东财半开 reset
+        "Connection": "close",
+    }
+    # allow_redirects=True 处理 push2 → push2delay 的 302
+    r = session.get(
+        EASTMONEY_CLIST_URL,
+        params=params,
+        headers=headers,
+        timeout=_DIRECT_HTTP_TIMEOUT_SEC,
+        allow_redirects=True,
+    )
+    r.raise_for_status()
+    body = r.json()
+    if body.get("rc") != 0:
+        raise RuntimeError(f"eastmoney rc={body.get('rc')} body={body}")
+    data = body.get("data") or {}
+    return data
+
+
+def _fetch_sector_flow_direct(ak_sector_type: str) -> pd.DataFrame:
+    """直连东财 push2/clist API,返回与 ak.stock_sector_fund_flow_rank('今日') 兼容的
+    DataFrame(列名:名称 / 代码 / 今日涨跌幅 / 今日主力净流入-净额 / 今日主力净流入-净占比)。
+
+    只支持 indicator="今日"(R6 不过度设计;5日/10日 走 akshare fallback)。
+
+    多页 sleep + 单页 retry 各自管:
+    - 单页失败:就地 retry 3 次(_with_retry)
+    - 全部页都拿不到 → raise(让上层 fallback 到 akshare)
+
+    ⚠️ 不在内部吞异常 — 调用方(_fetch_sector_flow)负责 fallback。
+    """
+    if ak_sector_type not in _SECTOR_TYPE_T_MAP:
+        raise ValueError(f"unsupported sector_type: {ak_sector_type}")
+    t_code = _SECTOR_TYPE_T_MAP[ak_sector_type]
+    base_params: dict[str, Any] = {
+        "pz": _DIRECT_PAGE_SIZE,
+        "po": 1,
+        "np": 1,
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+        "fltt": 2,
+        "invt": 2,
+        "fid0": "f62",          # 今日主力净流入字段(用于排序)
+        "fs": f"m:90 t:{t_code}",  # m:90 = 板块市场;t:2/3/1 = 行业/概念/地域
+        "stat": 1,
+        # 只取真正用到的 5 个 field(减少东财负担、降低风控概率)
+        # f12=代码 f14=名称 f3=今日涨跌幅% f62=主力净流入元 f184=主力净流入占比%
+        "fields": "f12,f14,f3,f62,f184",
+        "rt": 52975239,
+    }
+
+    session = requests.Session()
+    try:
+        # 第 1 页:拿 total 算总页数 + 数据
+        first_params = {**base_params, "pn": 1, "_": int(time.time() * 1000)}
+        first_data = _direct_get_one_page(first_params, session)
+        total: int = int(first_data.get("total") or 0)
+        if total <= 0:
+            raise RuntimeError(f"eastmoney returned total=0 for {ak_sector_type}")
+
+        all_rows: list[dict[str, Any]] = list(first_data.get("diff") or [])
+        total_pages = (total + _DIRECT_PAGE_SIZE - 1) // _DIRECT_PAGE_SIZE
+
+        # 2..N 页
+        for page in range(2, total_pages + 1):
+            # 随机 sleep,降低风控概率(本机实测 0.1s 就 OK,放宽到 0.4-1.2s 兜底)
+            time.sleep(random.uniform(_DIRECT_SLEEP_MIN_SEC, _DIRECT_SLEEP_MAX_SEC))
+            page_params = {**base_params, "pn": page, "_": int(time.time() * 1000)}
+            try:
+                page_data = _direct_get_one_page(page_params, session)
+            except Exception as e:
+                # 单页失败不致命:记日志后继续,丢一页可接受(R2:数据快照,缺就缺)
+                logger.warning(
+                    "direct sector_flow page %d/%d failed (skipping): %s: %s",
+                    page, total_pages, type(e).__name__, e,
+                )
+                continue
+            all_rows.extend(page_data.get("diff") or [])
+    finally:
+        session.close()
+
+    if not all_rows:
+        raise RuntimeError("eastmoney returned no rows after all pages")
+
+    # 映射成 ak.stock_sector_fund_flow_rank 兼容列名(下游 _fetch_sector_flow 消费的 5 列)
+    df = pd.DataFrame(all_rows)
+    # 字段重命名:f-codes → 中文列名
+    rename_map = {
+        "f12": "代码",
+        "f14": "名称",
+        "f3": "今日涨跌幅",
+        "f62": "今日主力净流入-净额",
+        "f184": "今日主力净流入-净占比",
+    }
+    df = df.rename(columns=rename_map)
+    # 东财对 "无数据" 的板块会返回 "-"(字符串),pd.to_numeric 转 NaN
+    for col in ("今日涨跌幅", "今日主力净流入-净额", "今日主力净流入-净占比"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    logger.info(
+        "direct fetch sector_flow ak_type=%s rows=%d (total=%d, pages=%d)",
+        ak_sector_type, len(df), total, total_pages,
+    )
+    return df
+
+
 def _fetch_sector_flow(
     indicator: str, ak_sector_type: str, db_sector_type: str
 ) -> list[dict[str, Any]]:
@@ -78,13 +231,29 @@ def _fetch_sector_flow(
 
     ak_sector_type: 传给 akshare 的板块类型(如 '行业资金流' / '概念资金流')
     db_sector_type: 入库的 enum 字符串(industry / concept / region)
+
+    策略:indicator="今日" 时优先走直连东财(绕开 akshare 老 UA 风控);
+    失败或 indicator≠"今日" 时 fallback 到 akshare。
     """
     label = f"sector_flow_{db_sector_type}_{indicator}"
 
-    def _do() -> pd.DataFrame:
+    def _do_direct() -> pd.DataFrame:
+        return _fetch_sector_flow_direct(ak_sector_type)
+
+    def _do_akshare() -> pd.DataFrame:
         return ak.stock_sector_fund_flow_rank(indicator=indicator, sector_type=ak_sector_type)
 
-    df = _with_retry(label, _do, None)
+    df: pd.DataFrame | None = None
+    if indicator == _DIRECT_SUPPORTED_INDICATOR:
+        df = _with_retry(f"{label}_direct", _do_direct, None)
+        if df is None or df.empty:
+            logger.warning(
+                "direct fetch failed for %s, falling back to akshare", label
+            )
+
+    if df is None or df.empty:
+        df = _with_retry(f"{label}_akshare", _do_akshare, None)
+
     if df is None or df.empty:
         return []
 

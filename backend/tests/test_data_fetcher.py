@@ -10,8 +10,19 @@ from src.services import data_fetcher as df_mod
 
 @pytest.fixture(autouse=True)
 def _no_retry_delay(monkeypatch):
-    """关掉 retry 之间的 sleep,让测试秒级跑完。"""
+    """关掉 retry 之间的 sleep + 直连分页 sleep,让测试秒级跑完。"""
     monkeypatch.setattr(df_mod, "RETRY_DELAY_SEC", 0)
+    monkeypatch.setattr(df_mod, "_DIRECT_SLEEP_MIN_SEC", 0)
+    monkeypatch.setattr(df_mod, "_DIRECT_SLEEP_MAX_SEC", 0)
+
+
+@pytest.fixture
+def _force_akshare_path(monkeypatch):
+    """让 _fetch_sector_flow_direct 直接 raise,使所有 sector_flow 走 akshare fallback。
+    用在原有 akshare-mock 测试上,避免它们意外撞到新加的直连分支。"""
+    def _raise(*_a, **_k):
+        raise RuntimeError("direct disabled by test fixture")
+    monkeypatch.setattr(df_mod, "_fetch_sector_flow_direct", _raise)
 
 
 # =====================================================================
@@ -59,7 +70,9 @@ def fake_index_df() -> pd.DataFrame:
 # =====================================================================
 
 
-def test_fetch_sector_flow_industry_returns_normalized_rows(fake_sector_df):
+def test_fetch_sector_flow_industry_returns_normalized_rows(
+    fake_sector_df, _force_akshare_path
+):
     with patch(
         "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
         return_value=fake_sector_df,
@@ -84,7 +97,9 @@ def test_fetch_sector_flow_industry_returns_normalized_rows(fake_sector_df):
     assert rows[1]["main_inflow_wan_x10000"] == -180_000_000
 
 
-def test_fetch_sector_flow_concept_uses_concept_label(fake_sector_df):
+def test_fetch_sector_flow_concept_uses_concept_label(
+    fake_sector_df, _force_akshare_path
+):
     with patch(
         "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
         return_value=fake_sector_df,
@@ -120,7 +135,7 @@ def test_fetch_market_index_sina(fake_index_df):
 # =====================================================================
 
 
-def test_fetch_sector_flow_returns_empty_on_network_error():
+def test_fetch_sector_flow_returns_empty_on_network_error(_force_akshare_path):
     with patch(
         "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
         side_effect=ConnectionError("network down"),
@@ -140,7 +155,7 @@ def test_fetch_market_index_returns_empty_on_exception():
     assert rows == []
 
 
-def test_fetch_sector_flow_returns_empty_on_empty_df():
+def test_fetch_sector_flow_returns_empty_on_empty_df(_force_akshare_path):
     with patch(
         "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
         return_value=pd.DataFrame(),
@@ -175,7 +190,8 @@ def test_fetch_fund_holdings_returns_empty_on_exception():
 # =====================================================================
 
 
-def test_retry_attempts_exactly_3_times_then_returns_fallback():
+def test_retry_attempts_exactly_3_times_then_returns_fallback(_force_akshare_path):
+    """direct 失败后 fallback 到 akshare;akshare 再 retry 3 次都失败 → 返回空。"""
     mock = MagicMock(side_effect=ConnectionError("boom"))
     with patch(
         "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
@@ -186,6 +202,221 @@ def test_retry_attempts_exactly_3_times_then_returns_fallback():
 
     assert rows == []
     assert mock.call_count == 3
+
+
+# =====================================================================
+# 直连东财(_fetch_sector_flow_direct)
+# =====================================================================
+
+
+def _make_em_response(diff_rows: list[dict], total: int | None = None):
+    """造一个东财 push2 返回的 mock Response 对象。"""
+    if total is None:
+        total = len(diff_rows)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {
+        "rc": 0,
+        "rt": 6,
+        "svr": 177542529,
+        "lt": 2,
+        "full": 1,
+        "data": {"total": total, "diff": diff_rows},
+    }
+    return mock_resp
+
+
+def test_direct_single_page_returns_renamed_dataframe():
+    """直连成功:f-codes → 中文列名映射正确,数值字段转 numeric。"""
+    em_rows = [
+        {"f12": "BK0428", "f14": "电池", "f3": 2.34, "f62": 520_000_000.0, "f184": 8.3},
+        {"f12": "BK0429", "f14": "光伏设备", "f3": -1.5, "f62": -180_000_000.0, "f184": -3.1},
+    ]
+    mock_resp = _make_em_response(em_rows)
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ) as mock_get:
+        df = df_mod._fetch_sector_flow_direct("行业资金流")
+
+    # 列名映射:f12/f14/f3/f62/f184 → 中文
+    assert set(["名称", "代码", "今日涨跌幅", "今日主力净流入-净额", "今日主力净流入-净占比"]).issubset(
+        set(df.columns)
+    )
+    assert len(df) == 2
+    assert df.iloc[0]["代码"] == "BK0428"
+    assert df.iloc[0]["名称"] == "电池"
+    assert df.iloc[0]["今日主力净流入-净额"] == 520_000_000.0
+
+    # URL + 关键 params 校验
+    call = mock_get.call_args
+    assert call.args[0] == df_mod.EASTMONEY_CLIST_URL
+    params = call.kwargs["params"]
+    assert params["fs"] == "m:90 t:2"  # 行业
+    assert params["fields"] == "f12,f14,f3,f62,f184"
+    assert params["fid0"] == "f62"
+    # Headers:UA + Referer + Connection: close
+    headers = call.kwargs["headers"]
+    assert "Chrome/120" in headers["User-Agent"]
+    assert headers["Referer"] == df_mod.EASTMONEY_REFERER
+    assert headers["Connection"] == "close"
+    assert call.kwargs["allow_redirects"] is True
+    assert call.kwargs["timeout"] == df_mod._DIRECT_HTTP_TIMEOUT_SEC
+
+
+def test_direct_concept_uses_t3_in_fs():
+    """概念资金流 → fs=m:90 t:3。"""
+    em_rows = [{"f12": "BK0739", "f14": "AI算力", "f3": 3.0, "f62": 1_000_000.0, "f184": 5.0}]
+    mock_resp = _make_em_response(em_rows)
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ) as mock_get:
+        df_mod._fetch_sector_flow_direct("概念资金流")
+    assert mock_get.call_args.kwargs["params"]["fs"] == "m:90 t:3"
+
+
+def test_direct_multi_page_pagination_concatenates_all():
+    """total=250 → 拆 3 页(100+100+50)。验证 pn 递增、行数合并。"""
+    page1 = [{"f12": f"BK1{i:03d}", "f14": f"行业{i}", "f3": 1.0, "f62": 1.0, "f184": 1.0}
+             for i in range(100)]
+    page2 = [{"f12": f"BK2{i:03d}", "f14": f"行业{i+100}", "f3": 1.0, "f62": 1.0, "f184": 1.0}
+             for i in range(100)]
+    page3 = [{"f12": f"BK3{i:03d}", "f14": f"行业{i+200}", "f3": 1.0, "f62": 1.0, "f184": 1.0}
+             for i in range(50)]
+
+    responses = [
+        _make_em_response(page1, total=250),
+        _make_em_response(page2, total=250),
+        _make_em_response(page3, total=250),
+    ]
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        side_effect=responses,
+    ) as mock_get:
+        df = df_mod._fetch_sector_flow_direct("行业资金流")
+    assert len(df) == 250
+    # pn=1,2,3
+    pns = [c.kwargs["params"]["pn"] for c in mock_get.call_args_list]
+    assert pns == [1, 2, 3]
+
+
+def test_direct_coerces_dash_string_to_nan():
+    """东财对无数据板块返回 '-' 字符串。pd.to_numeric coerce 成 NaN,
+    上层 _fetch_sector_flow 看到 None 时跳过,不入库。"""
+    em_rows = [
+        {"f12": "BK_DASH", "f14": "停牌板块", "f3": "-", "f62": "-", "f184": "-"},
+        {"f12": "BK_OK", "f14": "正常板块", "f3": 1.0, "f62": 100.0, "f184": 0.5},
+    ]
+    mock_resp = _make_em_response(em_rows)
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ):
+        df = df_mod._fetch_sector_flow_direct("行业资金流")
+    assert len(df) == 2
+    # NaN 行
+    assert pd.isna(df.iloc[0]["今日主力净流入-净额"])
+    assert df.iloc[1]["今日主力净流入-净额"] == 100.0
+
+
+def test_direct_raises_on_rc_nonzero():
+    """东财返回 rc!=0 → raise 让上层 retry / fallback。"""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {"rc": 1, "data": None}
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ):
+        with pytest.raises(RuntimeError):
+            df_mod._fetch_sector_flow_direct("行业资金流")
+
+
+def test_direct_raises_on_total_zero():
+    """total=0 → 认为东财空回应,raise 触发 fallback(防止悄无声息入空数据)。"""
+    mock_resp = _make_em_response([], total=0)
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ):
+        with pytest.raises(RuntimeError):
+            df_mod._fetch_sector_flow_direct("行业资金流")
+
+
+def test_direct_unsupported_sector_type_raises():
+    with pytest.raises(ValueError):
+        df_mod._fetch_sector_flow_direct("不存在的类型")
+
+
+def test_direct_page_failure_skips_that_page_not_whole_fetch():
+    """单页 raise 不致命,跳过后继续 — 用户视角少几个尾部板块可接受。"""
+    page1 = [{"f12": "BK001", "f14": "A", "f3": 1.0, "f62": 1.0, "f184": 1.0}]
+    page3 = [{"f12": "BK003", "f14": "C", "f3": 1.0, "f62": 1.0, "f184": 1.0}]
+
+    # total=250 → 3 页;第 2 页抛
+    def _side_effect(*_a, **kwargs):
+        pn = kwargs["params"]["pn"]
+        if pn == 1:
+            return _make_em_response(page1, total=250)
+        if pn == 2:
+            raise ConnectionError("page2 down")
+        if pn == 3:
+            return _make_em_response(page3, total=250)
+        raise AssertionError(f"unexpected pn={pn}")
+
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        side_effect=_side_effect,
+    ):
+        df = df_mod._fetch_sector_flow_direct("行业资金流")
+    # 第 1、3 页拿到,第 2 页丢了
+    assert len(df) == 2
+    assert set(df["代码"]) == {"BK001", "BK003"}
+
+
+def test_fetch_sector_flow_industry_uses_direct_when_succeeds():
+    """端到端:direct 成功时不应调用 akshare。"""
+    em_rows = [{"f12": "BK0428", "f14": "电池", "f3": 2.34, "f62": 520_000_000.0, "f184": 8.3}]
+    mock_resp = _make_em_response(em_rows)
+    ak_mock = MagicMock()
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        return_value=mock_resp,
+    ), patch(
+        "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
+        new=ak_mock,
+        create=True,
+    ):
+        rows = df_mod.fetch_sector_flow_industry()
+
+    assert len(rows) == 1
+    assert rows[0]["sector_code"] == "BK0428"
+    assert rows[0]["sector_name"] == "电池"
+    # R1 整数(5.2 亿元 = 5.2e8 元 / 1e4 = 5.2e4 万元;再 × 10000 = 5.2e8)
+    assert rows[0]["main_inflow_wan_x10000"] == 520_000_000
+    assert rows[0]["change_pct_x10000"] == 234
+    assert rows[0]["sector_type"] == "industry"
+    # akshare 完全没被调用
+    ak_mock.assert_not_called()
+
+
+def test_fetch_sector_flow_industry_falls_back_to_akshare_when_direct_fails(
+    fake_sector_df,
+):
+    """direct 抛网络异常 → fallback 到 akshare 拿数据,行为 R2-兼容。"""
+    with patch(
+        "src.services.data_fetcher.requests.Session.get",
+        side_effect=ConnectionResetError("VPS reset"),
+    ), patch(
+        "src.services.data_fetcher.ak.stock_sector_fund_flow_rank",
+        return_value=fake_sector_df,
+        create=True,
+    ) as ak_mock:
+        rows = df_mod.fetch_sector_flow_industry()
+    assert len(rows) == 2
+    ak_mock.assert_called_once_with(indicator="今日", sector_type="行业资金流")
 
 
 # =====================================================================
