@@ -136,3 +136,29 @@ export interface AISummary {
   generated_at: string               // ISO datetime
   cached: boolean
 }
+
+// ===== 主力雷达(PR16)=====
+// R3 红线:badge 只有 '已持有' / '候选',score 只是客观雷达分。
+// sector_change_pct 是百分数(2.10 = 2.10%),跟 SectorFlow.change_pct 的
+// fraction(0.0210)刻意不同,雷达 spec 这么要求。
+
+export interface RadarFundItem {
+  fund_code: string
+  fund_name: string
+  matched_sector: string             // 命中的中文标签
+  sector_code: string                // BK code
+  sector_rank: number                // 1-based
+  sector_main_inflow_wan: string     // Decimal 万元
+  sector_main_inflow_yi: string      // Decimal 亿元(已 / 10000)
+  sector_change_pct: string | null   // Decimal 百分数
+  score: number                      // 0..9
+  badge: '已持有' | '候选'
+}
+
+export interface DashboardRadarResponse {
+  mode: 'intraday'
+  trade_date: string | null
+  snapshot_time: string | null       // ISO datetime
+  holdings: RadarFundItem[]
+  candidates: RadarFundItem[]
+}

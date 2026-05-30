@@ -3,12 +3,14 @@ import { computed, onMounted, ref } from 'vue'
 import { dashboardApi, type SectorTypeFilter } from '../api/client'
 import AiSummary from '../components/dashboard/AiSummary.vue'
 import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
+import MainRadar from '../components/dashboard/MainRadar.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
+  DashboardRadarResponse,
   HoldingsSummary,
   IntradayTopSectors,
   MarketSnapshot,
@@ -54,6 +56,11 @@ const fundsError = ref('')
 const aiStatus = ref<Status>('loading')
 const aiData = ref<AISummary | null>(null)
 const aiError = ref('')
+
+// PR16:主力雷达(intraday)
+const radarStatus = ref<Status>('loading')
+const radarData = ref<DashboardRadarResponse | null>(null)
+const radarError = ref('')
 
 // 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
 // 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
@@ -137,6 +144,11 @@ onMounted(() => {
       (d) => { aiData.value = d; aiStatus.value = 'ready' },
       (e) => { aiError.value = _errMsg(e); aiStatus.value = 'error' },
     ),
+    // PR16:主力雷达
+    dashboardApi.radar('intraday', 20).then(
+      (d) => { radarData.value = d; radarStatus.value = 'ready' },
+      (e) => { radarError.value = _errMsg(e); radarStatus.value = 'error' },
+    ),
     // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
     // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
     dashboardApi.topSectors(100, 'all').then(
@@ -176,7 +188,14 @@ onMounted(() => {
       @change-mode="onSectorsModeChange"
     />
 
-    <!-- 4. 最强 20 基金候选(市场维度,不过滤持仓)-->
+    <!-- 4. 主力雷达(PR16 — intraday 板块 → 基金映射)-->
+    <MainRadar
+      :status="radarStatus"
+      :data="radarData"
+      :error="radarError"
+    />
+
+    <!-- 5. 最强 20 基金候选(市场维度,不过滤持仓)-->
     <MarketTopFunds
       :status="fundsStatus"
       :data="fundsData"

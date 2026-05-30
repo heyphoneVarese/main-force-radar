@@ -207,6 +207,57 @@ class IntradayTopSectorsResponse(BaseModel):
     )
 
 
+class RadarFundItem(BaseModel):
+    """主力雷达单条基金项(PR16)。
+
+    R3 红线:`score` 是客观雷达分(rank_score + inflow_score,封顶 9),
+    不是买卖信号。`badge` 是身份标签(已持有/候选),不是操作指令。
+    """
+
+    fund_code: str
+    fund_name: str
+    matched_sector: str = Field(description="命中的中文板块标签,如 '半导体'")
+    sector_code: str = Field(description="eastmoney BK code,如 'BK0490'")
+    sector_rank: int = Field(ge=1, description="该板块在 industry 内的排名(1-based)")
+    sector_main_inflow_wan: Decimal = Field(
+        description="该板块主力净流入,万元(int_to_wan_yuan)"
+    )
+    sector_main_inflow_yi: Decimal = Field(
+        description="该板块主力净流入,亿元(为前端方便直接显示;= main_inflow_wan / 10000)"
+    )
+    sector_change_pct: Decimal | None = Field(
+        default=None,
+        description="该板块涨跌幅,百分数表示(2.10 = 2.10%,跟 sectors/top 的 fraction 形式不同 — 跟用户的雷达 spec 对齐)"
+    )
+    score: int = Field(
+        ge=0, le=9,
+        description="客观雷达分(rank_score + inflow_score 封顶 9);不是买卖建议"
+    )
+    badge: str = Field(description="'已持有' 或 '候选'")
+
+
+class DashboardRadarResponse(BaseModel):
+    """主力雷达响应(PR16)。
+
+    V1 只支持 mode='intraday'(基于 intraday_sector_flow 最新 snapshot)。
+    holdings/candidates 各自按 score DESC, sector_rank ASC 排,最多 n 条。
+    """
+
+    mode: str = Field(description="V1 固定 'intraday'")
+    trade_date: date | None = Field(
+        description="snapshot_time 的日期部分;空库 → null"
+    )
+    snapshot_time: datetime | None = Field(
+        description="最新 snapshot 时刻(Asia/Shanghai 精确到分钟);空库 → null"
+    )
+    holdings: list[RadarFundItem] = Field(
+        description="我的持仓中命中强势板块的基金"
+    )
+    candidates: list[RadarFundItem] = Field(
+        description="非持仓但命中强势板块的基金(可视为候选池)"
+    )
+
+
 class AISummaryResponse(BaseModel):
     """AI 一句话结论(24h TTL 缓存)。
 

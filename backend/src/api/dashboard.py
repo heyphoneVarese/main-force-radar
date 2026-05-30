@@ -12,6 +12,7 @@ R 红线兼容:
 - GET /api/dashboard/ai-summary
 """
 
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -22,12 +23,14 @@ from src.db import get_session
 from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
+    DashboardRadarResponse,
     HoldingSignalResponse,
     HoldingsSummaryResponse,
     IntradayTopSectorsResponse,
     MarketIndexResponse,
     MarketSnapshotResponse,
     MatchedSector,
+    RadarFundItem,
     SectorFlowResponse,
     TopFundResponse,
     TopFundsResponse,
@@ -37,6 +40,7 @@ from src.services.dashboard_ai import get_or_build_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES
+from src.services.radar import build_intraday_radar
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -238,6 +242,64 @@ def get_intraday_top_sectors(
             _to_intraday_sector_response(r, i + 1)
             for i, r in enumerate(rows)
         ],
+    )
+
+
+# =====================================================================
+# 主力雷达(PR16)— intraday_sector_flow → funds 映射
+# =====================================================================
+
+
+def _to_radar_item(raw: dict) -> RadarFundItem:
+    """service 出的 dict(_x10000 整数)→ Pydantic Decimal。
+    sector_change_pct 用百分数(2.10 表 2.10%),跟雷达 spec 一致 —
+    这是跟 sectors/top 的 fraction 形式刻意不同的"展示口径"。"""
+    wan_x10000 = raw["sector_main_inflow_wan_x10000"]
+    wan = int_to_wan_yuan(wan_x10000)         # 万元
+    yi = wan / Decimal(10_000)                # 亿元 = 万元 / 10000
+    cp_x10000 = raw["sector_change_pct_x10000"]
+    return RadarFundItem(
+        fund_code=raw["fund_code"],
+        fund_name=raw["fund_name"],
+        matched_sector=raw["matched_sector"],
+        sector_code=raw["sector_code"],
+        sector_rank=raw["sector_rank"],
+        sector_main_inflow_wan=wan,
+        sector_main_inflow_yi=yi,
+        sector_change_pct=(
+            Decimal(cp_x10000) / Decimal(100)
+            if cp_x10000 is not None else None
+        ),
+        score=raw["score"],
+        badge=raw["badge"],
+    )
+
+
+@router.get("/radar", response_model=DashboardRadarResponse)
+def get_dashboard_radar(
+    mode: Literal["intraday"] = Query(
+        "intraday", description="V1 只支持 'intraday'"
+    ),
+    n: int = Query(20, ge=1, le=100, description="每组(holdings/candidates)最多返回 N 条"),
+    db: Session = Depends(get_session),
+) -> DashboardRadarResponse:
+    """主力雷达 — 把盘中实时强势板块映射到 holdings + candidates。
+
+    走 services/radar.build_intraday_radar。R3 红线:输出只有"客观雷达分",
+    不带任何买卖建议。
+
+    - mode='intraday' → 用 intraday_sector_flow 最新 snapshot
+    - sector_type 固定 industry(第一版,避免 concept 噪声)
+    - holdings/candidates 各按 (score DESC, sector_rank ASC) 排,各取 n
+    - 空库 → mode='intraday', trade_date=null, snapshot_time=null, [], []
+    """
+    raw = build_intraday_radar(db, n=n)
+    return DashboardRadarResponse(
+        mode=raw["mode"],
+        trade_date=raw["trade_date"],
+        snapshot_time=raw["snapshot_time"],
+        holdings=[_to_radar_item(h) for h in raw["holdings"]],
+        candidates=[_to_radar_item(c) for c in raw["candidates"]],
     )
 
 

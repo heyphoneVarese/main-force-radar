@@ -1,6 +1,7 @@
 // 极简 fetch 封装。后端错误 detail 透传到 Error.message,UI 层用 ElMessage 展示。
 import type {
   AISummary,
+  DashboardRadarResponse,
   Fund,
   FundCreate,
   Holding,
@@ -87,4 +88,8 @@ export const dashboardApi = {
   topFunds: (n: number = 20) =>
     jsonFetch<TopFunds>(`${BASE}/dashboard/funds/top?n=${n}`),
   aiSummary: () => jsonFetch<AISummary>(`${BASE}/dashboard/ai-summary`),
+  radar: (mode: 'intraday' = 'intraday', n: number = 20) =>
+    jsonFetch<DashboardRadarResponse>(
+      `${BASE}/dashboard/radar?mode=${mode}&n=${n}`
+    ),
 }
