@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { dashboardApi } from '../api/client'
+import AiSummary from '../components/dashboard/AiSummary.vue'
+import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import type {
   AISummary,
   HoldingSignal,
@@ -113,63 +115,15 @@ function signalCounts(holdings: HoldingSignal[]): Array<[string, number]> {
     .filter((k) => k in counts)
     .map((k) => [k, counts[k]] as [string, number])
 }
-
-function fmtDateTime(iso: string): string {
-  // 后端 cn_now() 给的是 ISO with TZ,这里只取到分钟
-  return iso.replace('T', ' ').slice(0, 16)
-}
 </script>
 
 <template>
   <div class="space-y-4">
     <!-- 1. 今日市场温度 -->
-    <section class="bg-white rounded-lg shadow-sm p-4 border">
-      <h3 class="text-base font-semibold mb-3 text-gray-900">今日市场温度</h3>
-      <p v-if="marketStatus === 'loading'" class="text-gray-400 text-sm">加载中...</p>
-      <p v-else-if="marketStatus === 'error'" class="text-red-500 text-sm">
-        ⚠ {{ marketError }}
-      </p>
-      <template v-else-if="marketData">
-        <p v-if="marketData.trade_date === null" class="text-gray-400 text-sm">
-          暂无数据(等待 cron 15:20 采集完成)
-        </p>
-        <template v-else>
-          <p class="text-xs text-gray-400 mb-2">截至 {{ marketData.trade_date }}</p>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div
-              v-for="idx in marketData.indices"
-              :key="idx.index_code"
-              class="border rounded p-2"
-            >
-              <div class="text-xs text-gray-500">{{ idx.index_name }}</div>
-              <div class="text-lg font-semibold" :class="pctColor(idx.change_pct)">
-                {{ fmtPct(idx.change_pct) }}
-              </div>
-              <div class="text-xs text-gray-400">{{ Number(idx.close).toFixed(2) }}</div>
-            </div>
-          </div>
-        </template>
-      </template>
-    </section>
+    <MarketTemp :status="marketStatus" :data="marketData" :error="marketError" />
 
     <!-- 2. AI 一句话结论 -->
-    <section class="bg-white rounded-lg shadow-sm p-4 border">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-base font-semibold text-gray-900">AI 结论</h3>
-        <span
-          v-if="aiStatus === 'ready' && aiData?.cached"
-          class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500"
-        >cached</span>
-      </div>
-      <p v-if="aiStatus === 'loading'" class="text-gray-400 text-sm">
-        加载中(AI 调用通常 1-3 秒)...
-      </p>
-      <p v-else-if="aiStatus === 'error'" class="text-red-500 text-sm">⚠ {{ aiError }}</p>
-      <template v-else-if="aiData">
-        <p class="text-gray-700 leading-relaxed">{{ aiData.summary }}</p>
-        <p class="text-xs text-gray-400 mt-2">生成于 {{ fmtDateTime(aiData.generated_at) }}</p>
-      </template>
-    </section>
+    <AiSummary :status="aiStatus" :data="aiData" :error="aiError" />
 
     <!-- 3. Top 20 板块 -->
     <section class="bg-white rounded-lg shadow-sm p-4 border">
