@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.dashboard import router as dashboard_router
 from src.api.funds import router as funds_router
 from src.api.holdings import router as holdings_router
 from src.config import settings
@@ -66,6 +67,7 @@ app.add_middleware(
 
 app.include_router(funds_router)
 app.include_router(holdings_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
