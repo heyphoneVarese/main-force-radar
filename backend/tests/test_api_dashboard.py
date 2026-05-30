@@ -1,14 +1,21 @@
-"""GET /api/dashboard/* 测试(market + sectors/top)。
+"""GET /api/dashboard/* 测试(market + sectors/top + holdings-summary)。
 
 只测路由 → DB 行为,不碰 akshare/scheduler。
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
 
-from src.models import MarketIndexDaily, SectorFlowDaily
+from src.models import (
+    Fund,
+    Holding,
+    MarketIndexDaily,
+    SectorAlias,
+    SectorFlowDaily,
+    Signal,
+)
 
 
 def _mk_index(
@@ -336,3 +343,326 @@ def test_sectors_top_invalid_sector_type_rejected(client):
     assert resp.status_code == 422
     resp = client.get("/api/dashboard/sectors/top?sector_type=bogus")
     assert resp.status_code == 422
+
+
+# =====================================================================
+# /api/dashboard/holdings-summary
+# =====================================================================
+
+
+def _mk_fund(
+    code: str, name: str, related_sectors: list[str] | None = None
+) -> Fund:
+    return Fund(
+        fund_code=code,
+        fund_name=name,
+        fund_type="混合",
+        related_sectors=related_sectors,
+    )
+
+
+def _mk_holding(code: str) -> Holding:
+    """最简持仓:占位 cost/shares,bought_at 任意。"""
+    return Holding(
+        fund_code=code,
+        cost_nav_x10000=10000,           # 1.0000
+        shares_x100=1_000_000,           # 10000.00
+        bought_at=date(2025, 1, 1),
+    )
+
+
+def _mk_alias(label: str, sector_code: str | None, sector_name: str) -> SectorAlias:
+    return SectorAlias(
+        chinese_label=label,
+        sector_code=sector_code,
+        sector_name=sector_name,
+        confidence=1.0,
+    )
+
+
+def _mk_signal(
+    sector_code: str,
+    trade_date: date,
+    signal_type: str,
+    persistence_score: int,
+    main_inflow_wan_x10000: int,
+) -> Signal:
+    return Signal(
+        trade_date=trade_date,
+        signal_type=signal_type,
+        target_type="sector",
+        target_code=sector_code,
+        signal_name=f"{sector_code} {signal_type}",
+        description="test",
+        score_x100=persistence_score * 100,
+        persistence_score=persistence_score,
+        main_inflow_wan_x10000=main_inflow_wan_x10000,
+        triggered_at=datetime(trade_date.year, trade_date.month, trade_date.day, 15, 30),
+    )
+
+
+# ---- 空库 ----------------------------------------------------------
+
+
+def test_holdings_summary_empty_db_returns_empty(client):
+    """无持仓 → 200 + {trade_date: null, holdings: []}。"""
+    resp = client.get("/api/dashboard/holdings-summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trade_date"] is None
+    assert body["holdings"] == []
+
+
+# ---- not_applicable(QDII 类,related_sectors 为 null)----
+
+
+def test_holdings_summary_not_applicable_when_no_related_sectors(db_session, client):
+    """QDII/指数/债基:funds.related_sectors=None → signal_type=not_applicable,
+    所有数值字段 null。"""
+    db_session.add_all([
+        _mk_fund("006479", "广发纳斯达克100ETF联接(QDII)C", related_sectors=None),
+        _mk_holding("006479"),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holdings-summary").json()
+    assert body["trade_date"] is None  # 无 via_sector 就无 trade_date
+    assert len(body["holdings"]) == 1
+    h = body["holdings"][0]
+    assert h["fund_code"] == "006479"
+    assert h["fund_name"] == "广发纳斯达克100ETF联接(QDII)C"
+    assert h["related_sectors"] == []
+    assert h["signal_type"] == "not_applicable"
+    assert h["persistence_score"] == 0
+    assert h["via_sector"] is None
+    assert h["main_inflow_wan"] is None
+    assert h["change_pct"] is None
+    assert "未映射" in h["reason"]
+
+
+# ---- 完整数据路径(Fund + Alias + Signal + SectorFlowDaily)----
+
+
+@pytest.fixture
+def seed_full_holding(db_session):
+    """造一只 fund 映射到 BK0727 半导体,Signal + sector_flow_daily 都齐。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("008281", "国泰CES半导体芯片行业ETF联接A",
+                 related_sectors=["半导体"]),
+        _mk_holding("008281"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_signal("BK0727", d, "bullish",
+                   persistence_score=8, main_inflow_wan_x10000=12_000_000_000),
+        SectorFlowDaily(
+            sector_code="BK0727",
+            sector_name="半导体",
+            sector_type="industry",
+            trade_date=d,
+            main_inflow_wan_x10000=12_000_000_000,
+            main_inflow_pct_x10000=920,
+            change_pct_x10000=312,
+        ),
+    ])
+    db_session.commit()
+    return d
+
+
+def test_holdings_summary_full_path_all_fields_populated(client, seed_full_holding):
+    body = client.get("/api/dashboard/holdings-summary").json()
+    assert body["trade_date"] == "2026-05-30"
+    assert len(body["holdings"]) == 1
+    h = body["holdings"][0]
+    assert h["fund_code"] == "008281"
+    assert h["fund_name"] == "国泰CES半导体芯片行业ETF联接A"
+    assert h["related_sectors"] == ["半导体"]
+    assert h["signal_type"] == "bullish"
+    assert h["persistence_score"] == 8
+    assert h["via_sector"] == "BK0727"
+    # 12_000_000_000 / 10000 = 1_200_000 万元
+    assert Decimal(h["main_inflow_wan"]) == Decimal("1200000")
+    # 312 / 10000 = 0.0312
+    assert Decimal(h["change_pct"]) == Decimal("0.0312")
+    assert "score=8" in h["reason"]
+
+
+# ---- Signal 有但 sector_flow_daily 同日无行 ---------------------
+
+
+def test_holdings_summary_signal_without_sector_flow_keeps_change_pct_null(
+    db_session, client
+):
+    """Signal 存了 main_inflow_wan,但 sector_flow_daily 那天没数据
+    → main_inflow_wan 仍有(从 Signal 拿),change_pct = null。
+    可能发生场景:scheduler 拉 sector_flow 失败,但 generate_signals 用旧 flow 算过分。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F0001", "测试基金", related_sectors=["半导体"]),
+        _mk_holding("F0001"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_signal("BK0727", d, "bullish",
+                   persistence_score=7, main_inflow_wan_x10000=5_000_000_000),
+        # 故意不加 SectorFlowDaily 行
+    ])
+    db_session.commit()
+
+    h = client.get("/api/dashboard/holdings-summary").json()["holdings"][0]
+    assert h["via_sector"] == "BK0727"
+    assert Decimal(h["main_inflow_wan"]) == Decimal("500000")  # 来自 Signal
+    assert h["change_pct"] is None  # sector_flow 没有就是 None
+
+
+# ---- 映射板块但无任何 Signal(scheduler 没跑过)-----------------
+
+
+def test_holdings_summary_mapped_but_no_signal_returns_neutral(db_session, client):
+    """sector 映射有,但 Signal 表里这个 sector 一条都没有(信号引擎还没跑)
+    → signal_type=neutral,via_sector=null,reason 提示采集。"""
+    db_session.add_all([
+        _mk_fund("F0002", "测试基金", related_sectors=["半导体"]),
+        _mk_holding("F0002"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        # 故意不加 Signal
+    ])
+    db_session.commit()
+
+    h = client.get("/api/dashboard/holdings-summary").json()["holdings"][0]
+    assert h["signal_type"] == "neutral"
+    assert h["persistence_score"] == 0
+    assert h["via_sector"] is None
+    assert h["main_inflow_wan"] is None
+    assert h["change_pct"] is None
+    assert "无 sector_flow" in h["reason"] or "请先采集" in h["reason"]
+
+
+# ---- 多板块,via_sector 取分最高 ---------------------------------
+
+
+def test_holdings_summary_picks_strongest_sector_as_via(db_session, client):
+    """一只基金映射到 2 个板块,via_sector 取持续性分最高的那个。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F0003", "双板块基金", related_sectors=["半导体", "AI算力"]),
+        _mk_holding("F0003"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_alias("AI算力", "BK0739", "AI算力"),
+        # 半导体 score=5(普通),AI 算力 score=8(强)→ via_sector 应该是 AI 算力
+        _mk_signal("BK0727", d, "neutral",
+                   persistence_score=5, main_inflow_wan_x10000=2_000_000_000),
+        _mk_signal("BK0739", d, "bullish",
+                   persistence_score=8, main_inflow_wan_x10000=8_000_000_000),
+    ])
+    db_session.commit()
+
+    h = client.get("/api/dashboard/holdings-summary").json()["holdings"][0]
+    assert h["via_sector"] == "BK0739"  # AI算力 score 高
+    assert h["signal_type"] == "bullish"
+    assert h["persistence_score"] == 8
+    assert Decimal(h["main_inflow_wan"]) == Decimal("800000")  # 8e9/1e4
+    # related_sectors 显示原始两个标签(都在)
+    assert set(h["related_sectors"]) == {"半导体", "AI算力"}
+
+
+# ---- 多持仓:排序 + trade_date 聚合 ------------------------------
+
+
+def test_holdings_summary_orders_by_fund_code_and_aggregates_trade_date(
+    db_session, client
+):
+    """3 只持仓:fund_code 字典序输出;顶层 trade_date 取所有 via_sector
+    Signal 中最大的那个。"""
+    d_early = date(2026, 5, 28)
+    d_late = date(2026, 5, 30)
+    db_session.add_all([
+        # F0010 → 半导体(信号 5/28 — 旧),F0020 → AI(信号 5/30 — 新)
+        _mk_fund("F0020", "Beta基金", related_sectors=["AI算力"]),
+        _mk_fund("F0010", "Alpha基金", related_sectors=["半导体"]),
+        _mk_holding("F0010"),
+        _mk_holding("F0020"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_alias("AI算力", "BK0739", "AI算力"),
+        _mk_signal("BK0727", d_early, "bullish",
+                   persistence_score=7, main_inflow_wan_x10000=3_000_000_000),
+        _mk_signal("BK0739", d_late, "bullish",
+                   persistence_score=8, main_inflow_wan_x10000=8_000_000_000),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holdings-summary").json()
+    # 顶层 trade_date = max(d_early, d_late) = 5/30
+    assert body["trade_date"] == "2026-05-30"
+    # holdings 按 fund_code 升序:F0010 在前
+    codes = [h["fund_code"] for h in body["holdings"]]
+    assert codes == ["F0010", "F0020"]
+
+
+# ---- 混合状态(not_applicable + 完整 + neutral)---------------
+
+
+def test_holdings_summary_handles_mixed_states_in_same_response(db_session, client):
+    """同一响应里混着 not_applicable / bullish / neutral 三种状态,
+    各自字段语义正确。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        # A: QDII not_applicable
+        _mk_fund("F_A", "QDII基金", related_sectors=None),
+        _mk_holding("F_A"),
+        # B: bullish(全数据)
+        _mk_fund("F_B", "半导体基金", related_sectors=["半导体"]),
+        _mk_holding("F_B"),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_signal("BK0727", d, "bullish",
+                   persistence_score=8, main_inflow_wan_x10000=12_000_000_000),
+        # C: 有 alias 但无 Signal → neutral
+        _mk_fund("F_C", "新基金", related_sectors=["医药"]),
+        _mk_holding("F_C"),
+        _mk_alias("医药", "BK0727_X", "医药生物"),  # 故意没建 signal
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holdings-summary").json()
+    assert body["trade_date"] == "2026-05-30"  # F_B 撑起 trade_date
+    assert len(body["holdings"]) == 3
+    by_code = {h["fund_code"]: h for h in body["holdings"]}
+
+    # A:not_applicable
+    assert by_code["F_A"]["signal_type"] == "not_applicable"
+    assert by_code["F_A"]["via_sector"] is None
+    # B:bullish 全字段
+    assert by_code["F_B"]["signal_type"] == "bullish"
+    assert by_code["F_B"]["via_sector"] == "BK0727"
+    assert Decimal(by_code["F_B"]["main_inflow_wan"]) == Decimal("1200000")
+    # C:neutral
+    assert by_code["F_C"]["signal_type"] == "neutral"
+    assert by_code["F_C"]["via_sector"] is None
+
+
+# ---- bearish 路径:负流入也能正确解码 ---------------------------
+
+
+def test_holdings_summary_bearish_signal_with_negative_inflow(db_session, client):
+    """退潮板块:main_inflow_wan_x10000 是大负数,API 输出 Decimal 也带负号。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_BEAR", "光伏基金", related_sectors=["光伏设备"]),
+        _mk_holding("F_BEAR"),
+        _mk_alias("光伏设备", "BK0429", "光伏设备"),
+        _mk_signal("BK0429", d, "bearish",
+                   persistence_score=8, main_inflow_wan_x10000=-1_800_000_000),
+        SectorFlowDaily(
+            sector_code="BK0429",
+            sector_name="光伏设备",
+            sector_type="industry",
+            trade_date=d,
+            main_inflow_wan_x10000=-1_800_000_000,
+            main_inflow_pct_x10000=-310,
+            change_pct_x10000=-150,
+        ),
+    ])
+    db_session.commit()
+
+    h = client.get("/api/dashboard/holdings-summary").json()["holdings"][0]
+    assert h["signal_type"] == "bearish"
+    # -1_800_000_000 / 10000 = -180_000 万元
+    assert Decimal(h["main_inflow_wan"]) == Decimal("-180000")
+    assert Decimal(h["change_pct"]) == Decimal("-0.015")

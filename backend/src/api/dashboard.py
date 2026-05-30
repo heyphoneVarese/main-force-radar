@@ -21,11 +21,14 @@ from sqlalchemy.orm import Session
 from src.db import get_session
 from src.models import MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
+    HoldingSignalResponse,
+    HoldingsSummaryResponse,
     MarketIndexResponse,
     MarketSnapshotResponse,
     SectorFlowResponse,
     TopSectorsResponse,
 )
+from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 
@@ -143,4 +146,53 @@ def get_top_sectors(
         trade_date=latest_date,
         sector_type=sector_type,
         sectors=[_to_sector_response(r, i + 1) for i, r in enumerate(rows)],
+    )
+
+
+# =====================================================================
+# 持仓摘要(包装 SignalEngine.get_fund_signal_summary)
+# =====================================================================
+
+
+@router.get("/holdings-summary", response_model=HoldingsSummaryResponse)
+def get_holdings_summary(
+    db: Session = Depends(get_session),
+) -> HoldingsSummaryResponse:
+    """每只持仓基金的信号摘要(Dashboard "我的持仓分析" 区数据源)。
+
+    走 services/dashboard_holdings.build_holdings_summary,本路由层只负责
+    R1 整数 → Decimal 反算 + Pydantic 校验。
+
+    - 空持仓 → 200 + {"trade_date": null, "holdings": []}
+    - not_applicable 基金(QDII / 指数 / 债基,sector_aliases 显式无 BK 对应)
+      → 各数值字段 null,reason 解释原因
+    - via_sector 有但当日 sector_flow_daily 没数据 → main_inflow_wan 仍有
+      (来自 Signal 表自带),change_pct = null
+    """
+    raw = build_holdings_summary(db)
+    holdings_response = [
+        HoldingSignalResponse(
+            fund_code=h["fund_code"],
+            fund_name=h["fund_name"],
+            related_sectors=h["related_sectors"],
+            signal_type=h["signal_type"],
+            persistence_score=h["persistence_score"],
+            via_sector=h["via_sector"],
+            main_inflow_wan=(
+                int_to_wan_yuan(h["main_inflow_wan_x10000"])
+                if h["main_inflow_wan_x10000"] is not None
+                else None
+            ),
+            change_pct=(
+                int_to_pct(h["change_pct_x10000"])
+                if h["change_pct_x10000"] is not None
+                else None
+            ),
+            reason=h["reason"],
+        )
+        for h in raw["holdings"]
+    ]
+    return HoldingsSummaryResponse(
+        trade_date=raw["trade_date"],
+        holdings=holdings_response,
     )

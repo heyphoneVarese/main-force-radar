@@ -79,3 +79,55 @@ class TopSectorsResponse(BaseModel):
     sectors: list[SectorFlowResponse] = Field(
         description="按 main_inflow_wan 降序排;最多 n 条(默认 20)"
     )
+
+
+class HoldingSignalResponse(BaseModel):
+    """单只持仓基金的信号摘要。
+
+    `signal_type` 取值见 src.models.enums.SignalType:
+    bullish / bearish / warning / neutral / not_applicable。
+    R3.1 红线:绝不出现 buy/sell/long/short/hold。
+    """
+
+    fund_code: str
+    fund_name: str | None = Field(description="未在 funds 表登记则 null")
+    related_sectors: list[str] = Field(
+        description="funds.related_sectors 的中文标签数组,如 ['半导体','AI']"
+    )
+    signal_type: str = Field(
+        description="bullish / bearish / warning / neutral / not_applicable"
+    )
+    persistence_score: int = Field(
+        ge=0,
+        description="持续性 0-9;not_applicable / 无 sector_flow 数据时为 0"
+    )
+    via_sector: str | None = Field(
+        default=None,
+        description="决定性板块的 eastmoney code(如 BK0727);不适用 / 无数据时 null"
+    )
+    main_inflow_wan: Decimal | None = Field(
+        default=None,
+        description="via_sector 最新 Signal 的主力净流入(万元;负=净流出);"
+                    "无 via_sector 时 null"
+    )
+    change_pct: Decimal | None = Field(
+        default=None,
+        description="via_sector 同日 sector_flow_daily 涨跌幅(小数 0.0312=3.12%);"
+                    "无对应行情时 null"
+    )
+    reason: str = Field(description="SignalEngine 给出的人类可读说明")
+
+
+class HoldingsSummaryResponse(BaseModel):
+    """所有持仓基金的信号摘要聚合。
+
+    trade_date:所有 holdings 的 via_sector Signal 中最大的那个;
+    若所有持仓都 not_applicable / 无 Signal,则为 null。
+    """
+
+    trade_date: date | None = Field(
+        description="所有持仓的最新 signal trade_date;前端显示'截至 X 日'"
+    )
+    holdings: list[HoldingSignalResponse] = Field(
+        description="按 fund_code 字典序排;无持仓 → []"
+    )
