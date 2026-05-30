@@ -525,6 +525,49 @@ def test_fetch_and_store_today_idempotent(db_session):
     assert stats2["indices_inserted"] == 0
 
 
+def test_fetch_and_store_today_writes_error_when_sector_silently_empty(db_session):
+    """新增可观测性:fetcher 内部吞掉异常返空 → fetch_and_store_today
+    也必须在 errors 里加一条,否则 VPS 上看不出来到底是 0 个板块还是网络挂了。"""
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=[],  # 静默返空(模拟 direct + akshare 都被吞掉)
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert stats["sectors_fetched"] == 0
+    assert stats["sectors_inserted"] == 0
+    assert any("sector_flow_industry" in e and "0 rows" in e for e in stats["errors"]), \
+        f"expected sector empty-error in errors, got: {stats['errors']}"
+    # 其他指数照常入库
+    assert stats["indices_inserted"] == 4
+
+
+def test_fetch_and_store_today_writes_error_when_index_silently_empty(db_session):
+    """同理:单个指数 fetcher 静默返空也写 errors。"""
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+
+    def _index_side(code: str):
+        if code == "sz399006":
+            return []  # 静默返空
+        return [_mk_index_row(code)]
+
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=_index_side,
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert stats["indices_inserted"] == 3  # 其余 3 个成
+    assert any("sz399006" in e and "0 rows" in e for e in stats["errors"]), \
+        f"expected sz399006 empty-error in errors, got: {stats['errors']}"
+
+
 def test_fetch_and_store_today_continues_on_sector_fetch_failure(db_session):
     """sector fetch 抛 → 不影响 indices 采集。"""
     with patch(

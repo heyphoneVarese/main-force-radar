@@ -534,6 +534,14 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
         stats["sectors_fetched"] = len(sector_rows)
         if sector_rows:
             stats["sectors_inserted"] = insert_sector_flow_rows(session, sector_rows)
+        else:
+            # 可观测性:fetcher 内部已吞掉 retry 异常,这里没收到 sector → 一定有问题。
+            # 不写 errors 的话上游 cron 完全看不出来。A 股交易日不可能 0 个板块。
+            stats["errors"].append(
+                "sector_flow_industry: returned 0 rows "
+                "(direct + akshare fallback both failed; check container logs "
+                "for 'fetch [...] failed after 3 attempts')"
+            )
         logger.info(
             "fetch_and_store_today: sector_flow_industry fetched=%d inserted=%d",
             stats["sectors_fetched"], stats["sectors_inserted"],
@@ -551,6 +559,11 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
             if index_rows:
                 stats["indices_inserted"] += insert_market_index_rows(
                     session, index_rows, index_name=name
+                )
+            else:
+                # 同 sectors:fetcher 静默返空也要让上游看见
+                stats["errors"].append(
+                    f"market_index[{code}/{name}]: returned 0 rows (retries exhausted)"
                 )
         except Exception as e:
             msg = f"market_index[{code}/{name}]: {type(e).__name__}: {e}"
