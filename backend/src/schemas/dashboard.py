@@ -3,7 +3,7 @@
 对外暴露 Decimal(用户面友好),内部走 money.py 转 int(R1)。
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -183,4 +183,25 @@ class TopFundsResponse(BaseModel):
     )
     funds: list[TopFundResponse] = Field(
         description="按 via_sector main_inflow 降序排;最多 n 条"
+    )
+
+
+class AISummaryResponse(BaseModel):
+    """AI 一句话结论(24h TTL 缓存)。
+
+    AI 不可用(无 key / 调用失败)时 graceful fallback,基于真实 digest
+    数据规则化输出,不返回空话,HTTP 仍 200。
+    """
+
+    trade_date: date | None = Field(
+        description="最新交易日(sector_flow_daily 最大日期);空库 → null"
+    )
+    summary: str = Field(
+        description="一句话结论(AI 或 fallback);R3:不含投资建议/涨跌预测"
+    )
+    generated_at: datetime = Field(
+        description="本次返回内容的生成时刻(Asia/Shanghai)"
+    )
+    cached: bool = Field(
+        description="true=命中 24h 缓存;false=本次新生成(AI 调用或 fallback)"
     )

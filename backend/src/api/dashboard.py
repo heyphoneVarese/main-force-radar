@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from src.db import get_session
 from src.models import MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
+    AISummaryResponse,
     HoldingSignalResponse,
     HoldingsSummaryResponse,
     MarketIndexResponse,
@@ -31,6 +32,7 @@ from src.schemas.dashboard import (
     TopFundsResponse,
     TopSectorsResponse,
 )
+from src.services.dashboard_ai import get_or_build_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES
@@ -249,3 +251,28 @@ def get_top_funds(
         for f in raw["funds"]
     ]
     return TopFundsResponse(trade_date=raw["trade_date"], funds=funds_response)
+
+
+# =====================================================================
+# AI 一句话结论(24h TTL 缓存)
+# =====================================================================
+
+
+@router.get("/ai-summary", response_model=AISummaryResponse)
+def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
+    """AI 一句话结论(Dashboard 首页"AI 结论"区数据源)。
+
+    走 services/dashboard_ai.get_or_build_summary,该服务负责:
+    - 24h 模块级 TTL 缓存
+    - trade_date 变化时自动 invalidate(15:20 cron 新数据到 → 下次调用重算)
+    - ANTHROPIC_API_KEY 缺失或 Anthropic 调用失败 → graceful fallback
+      (不报错;HTTP 仍 200;fallback 基于真实 digest 渲染,非空话)
+
+    返回:
+    - trade_date: 最新有 sector_flow 数据的日期;空库 → null
+    - summary  : 一句话结论
+    - generated_at: 该 summary 生成时刻
+    - cached   : true=命中缓存 / false=本次新生成
+    """
+    raw = get_or_build_summary(db)
+    return AISummaryResponse(**raw)
