@@ -26,6 +26,23 @@ dev = [
 [tool.uv]
 package = false
 
+# 阿里 PyPI 镜像作为 default index
+# ---------------------------------
+# 背景:Dockerfile 里 UV_DEFAULT_INDEX env 只对 *resolve* 时管用;
+# 而 UV_FROZEN=1 build 走的是 lockfile 里写死的 source URL。
+# 之前 uv.lock 里 akracer 那行 source 是 pypi.org → VPS 拉
+# 10MB sdist 30s 也下不完,卡住整个 build。
+#
+# 这里在 pyproject.toml 里把阿里源设为 default,`uv lock` 重生时
+# 所有 source 会改写成 aliyun URL,sha256 字节级一致(因为阿里是
+# 镜像)。Docker build 拉包从 pypi.org 改成阿里内网,VPS 上几秒
+# 完事。
+#
+# 万一阿里某个包丢了,fallback 到 PyPI(explicit=false 默认行为)。
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
