@@ -345,3 +345,179 @@ def test_radar_badge_strings_are_held_or_candidate(
     body = client.get("/api/dashboard/radar").json()
     all_items = body["holdings"] + body["candidates"]
     assert all(item["badge"] in {"已持有", "候选"} for item in all_items)
+
+
+# =====================================================================
+# PR17 — purity_score
+# =====================================================================
+
+
+def test_purity_single_related_sector_returns_9(db_session, client):
+    """rule 1:related_sectors 长度 1 → base 9。fund_name 不含半导体 →
+    rule 5/6 都不加 → 总 9。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_PURE1", "测试基金", ["半导体"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    item = body["candidates"][0]
+    assert item["purity_score"] == 9
+
+
+def test_purity_two_related_sectors_returns_8(db_session, client):
+    """rule 2:长度 2 → base 8。fund_name 无关键词 → 不加 bonus。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_PURE2", "测试基金", ["半导体", "AI算力"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    item = body["candidates"][0]
+    assert item["purity_score"] == 8
+
+
+def test_purity_three_related_sectors_returns_7(db_session, client):
+    """rule 3:长度 3 → base 7。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_PURE3", "测试基金", ["半导体", "AI算力", "新能源车"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    item = body["candidates"][0]
+    assert item["purity_score"] == 7
+
+
+def test_purity_four_or_more_related_sectors_returns_6(db_session, client):
+    """rule 4:长度 ≥4 → base 6。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_PURE4", "测试基金",
+                 ["半导体", "AI算力", "新能源车", "消费", "黄金"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    item = body["candidates"][0]
+    assert item["purity_score"] == 6
+
+
+def test_purity_fund_name_contains_matched_adds_bonus(db_session, client):
+    """rule 5:fund_name 含 matched_sector → +1。这里两标签 base=8 + 1 = 9。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_NAMED", "国泰半导体行业ETF", ["半导体", "通信设备"]),
+    ])
+    db_session.commit()
+    item = client.get("/api/dashboard/radar").json()["candidates"][0]
+    # base 8(2 related) + rule5 半导体在名字里 + rule6 主题 → 8+1+1=10 → cap 9
+    assert item["purity_score"] == 9
+
+
+def test_purity_theme_synonym_in_name_adds_bonus(db_session, client):
+    """rule 6:matched=半导体,fund_name 含'芯片'(同主题同义词)+1。
+    base 9(单标签)+ rule6 → cap 9。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_SYN", "华夏国证芯片ETF", ["半导体"]),
+    ])
+    db_session.commit()
+    item = client.get("/api/dashboard/radar").json()["candidates"][0]
+    # base 9 + 0(rule5 没"半导体"在名字)+ 1(rule6 "芯片" 同主题)= 10 → cap 9
+    assert item["purity_score"] == 9
+
+
+def test_purity_cap_at_9_never_exceeds(db_session, client):
+    """rule 7:封顶 9。即便 base+rule5+rule6 加起来 11 也封 9。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        # base 9 + rule5(半导体在名字)+ rule6(芯片同主题)= 11 → cap 9
+        _mk_fund("F_CAP", "国泰半导体芯片ETF联接A", ["半导体"]),
+    ])
+    db_session.commit()
+    item = client.get("/api/dashboard/radar").json()["candidates"][0]
+    assert item["purity_score"] == 9
+    assert item["purity_score"] <= 9
+
+
+def test_purity_high_ranks_before_low_within_same_score(db_session, client):
+    """同一板块 → 两基金 score 相同;purity 高的应该排前。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 12_000_000_000_000),  # 120 亿,rank 1,score 9
+        # F_LOW:base 6(5 related),无 bonus = 6
+        _mk_fund("F_LOW", "万家成长", ["半导体", "AI", "消费", "白酒", "黄金"]),
+        # F_HIGH:base 9(单 related)+ rule5 + rule6 = 9
+        _mk_fund("F_HIGH", "国泰半导体芯片ETF", ["半导体"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    codes = [c["fund_code"] for c in body["candidates"]]
+    assert codes == ["F_HIGH", "F_LOW"]
+
+
+def test_purity_holdings_and_candidates_both_carry_field(
+    db_session, client
+):
+    """purity_score 字段在 holdings 和 candidates 都返回。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("F_HELD", "F1", ["半导体"]),
+        _mk_holding("F_HELD"),
+        _mk_fund("F_CAND", "F2", ["半导体"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    assert "purity_score" in body["holdings"][0]
+    assert "purity_score" in body["candidates"][0]
+
+
+def test_purity_does_not_change_original_score_logic(
+    client, seed_three_funds_one_sector
+):
+    """fixture: 950e9 万 inflow + rank 1 → score = 5(rank) + 4(>=100亿) = 9。
+    确认 PR17 没破坏 score。"""
+    body = client.get("/api/dashboard/radar").json()
+    item = body["holdings"][0]
+    assert item["score"] == 9
+
+
+def test_purity_sort_tertiary_sector_rank(db_session, client):
+    """同 score 同 purity → 按 sector_rank ASC。
+    构造:板块 A inflow 100亿 rank=1,板块 B 90亿 rank=2。
+    F_A 标签[A],F_B 标签[B],各自 score 都是 9,purity 都是 9 →
+    sector_rank 小的(F_A,rank=1)排前。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_A", "板块A", s, 10_000_000_000_000),   # 100 亿 → rank 1
+        _mk_intraday("BK_B", "板块B", s, 9_000_000_000_000),     # 90 亿  → rank 2
+        _mk_fund("F_A", "FA", ["板块A"]),
+        _mk_fund("F_B", "FB", ["板块B"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    codes = [c["fund_code"] for c in body["candidates"]]
+    assert codes == ["F_A", "F_B"]
+
+
+def test_purity_sort_quaternary_fund_code(db_session, client):
+    """同 score 同 purity 同 sector_rank → fund_code 字典序 ASC 兜底稳定。"""
+    s = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_fund("ZZZ001", "FZ", ["半导体"]),
+        _mk_fund("AAA001", "FA", ["半导体"]),
+        _mk_fund("MMM001", "FM", ["半导体"]),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/radar").json()
+    codes = [c["fund_code"] for c in body["candidates"]]
+    assert codes == ["AAA001", "MMM001", "ZZZ001"]

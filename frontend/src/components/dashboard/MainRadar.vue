@@ -60,6 +60,13 @@ function scoreChipClass(score: number): string {
   return 'bg-gray-100 text-gray-500 border-gray-200'
 }
 
+// PR17:purity chip 用 violet/slate 系,跟 score 区分,不抢主信号
+function purityChipClass(p: number): string {
+  if (p >= 8) return 'bg-violet-50 text-violet-700 border-violet-200'
+  if (p >= 6) return 'bg-slate-50 text-slate-700 border-slate-200'
+  return 'bg-gray-100 text-gray-500 border-gray-200'
+}
+
 function badgeClass(badge: string): string {
   return badge === '已持有'
     ? 'bg-teal-50 text-teal-700 border-teal-200'
@@ -123,13 +130,22 @@ function badgeClass(badge: string): string {
                 :key="`h-${item.fund_code}`"
                 class="py-2.5 flex items-start gap-3"
               >
-                <span
-                  class="text-xs px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap shrink-0"
-                  :class="scoreChipClass(item.score)"
-                  title="客观雷达分(rank_score + inflow_score 封顶 9),不是买卖建议"
-                >
-                  {{ item.score }}/9
-                </span>
+                <div class="flex flex-col gap-1 shrink-0">
+                  <span
+                    class="text-xs px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap"
+                    :class="scoreChipClass(item.score)"
+                    title="客观雷达分(rank_score + inflow_score 封顶 9),不是买卖建议"
+                  >
+                    {{ item.score }}/9
+                  </span>
+                  <span
+                    class="text-[10px] leading-none px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap"
+                    :class="purityChipClass(item.purity_score)"
+                    title="基金主题贴合度(0-9),不是收益预测、不是买卖建议"
+                  >
+                    纯度 {{ item.purity_score }}/9
+                  </span>
+                </div>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-start justify-between gap-2">
                     <div class="text-sm text-gray-800 font-medium truncate flex-1">
@@ -185,13 +201,22 @@ function badgeClass(badge: string): string {
                 :key="`c-${item.fund_code}`"
                 class="py-2.5 flex items-start gap-3"
               >
-                <span
-                  class="text-xs px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap shrink-0"
-                  :class="scoreChipClass(item.score)"
-                  title="客观雷达分(rank_score + inflow_score 封顶 9),不是买卖建议"
-                >
-                  {{ item.score }}/9
-                </span>
+                <div class="flex flex-col gap-1 shrink-0">
+                  <span
+                    class="text-xs px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap"
+                    :class="scoreChipClass(item.score)"
+                    title="客观雷达分(rank_score + inflow_score 封顶 9),不是买卖建议"
+                  >
+                    {{ item.score }}/9
+                  </span>
+                  <span
+                    class="text-[10px] leading-none px-1.5 py-0.5 rounded border tabular-nums whitespace-nowrap"
+                    :class="purityChipClass(item.purity_score)"
+                    title="基金主题贴合度(0-9),不是收益预测、不是买卖建议"
+                  >
+                    纯度 {{ item.purity_score }}/9
+                  </span>
+                </div>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-start justify-between gap-2">
                     <div class="text-sm text-gray-800 font-medium truncate flex-1">

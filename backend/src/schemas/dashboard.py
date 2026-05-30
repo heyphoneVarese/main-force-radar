@@ -233,6 +233,11 @@ class RadarFundItem(BaseModel):
         ge=0, le=9,
         description="客观雷达分(rank_score + inflow_score 封顶 9);不是买卖建议"
     )
+    purity_score: int = Field(
+        ge=0, le=9,
+        description="基金主题贴合度(0-9);只表达基金跟当前强势板块的关联紧密度,"
+                    "不是收益预测,不是买卖建议。同一板块多基金时用于区分纯度。"
+    )
     badge: str = Field(description="'已持有' 或 '候选'")
 
 

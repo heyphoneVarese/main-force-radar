@@ -76,6 +76,99 @@ def _compute_score(rank: int, inflow_wan_x10000: int) -> int:
     return min(9, _rank_score(rank) + _inflow_score(inflow_yi))
 
 
+# ============================================================
+# 基金纯度评分(PR17)
+# ============================================================
+# R3 兼容:purity_score 只表达"基金与该强势板块的主题贴合度",
+# 不是收益预测、不是买卖建议。文档化在 schema description 里。
+#
+# 第一版 R6 简化:不读基金真实持仓成分(不接 fund_portfolio_hold_em),
+# 只看 related_sectors 数量 + fund_name 命中关键词。
+#
+# 主题字典:matched_sector ∈ keywords[i] 时,fund_name 命中同主题
+# 任一 keyword → +1 bonus(rule 6)。matched_sector 本身在 fund_name 里
+# → 另 +1 bonus(rule 5)。两个 bonus 可同时触发,最后封顶 9。
+
+THEME_GROUPS: list[dict] = [
+    {
+        "name": "semiconductor",
+        "sector_keywords": ["半导体", "芯片", "集成电路"],
+        "name_keywords": ["半导体", "芯片", "集成电路"],
+    },
+    {
+        "name": "ai",
+        "sector_keywords": ["人工智能", "AI", "算力", "光模块", "CPO"],
+        "name_keywords": ["人工智能", "AI", "算力", "光模块", "CPO"],
+    },
+    {
+        "name": "power",
+        "sector_keywords": ["电力", "电网", "储能"],
+        "name_keywords": ["电力", "电网", "储能"],
+    },
+    {
+        "name": "defense",
+        "sector_keywords": ["军工", "卫星", "商业航天"],
+        "name_keywords": ["军工", "卫星", "商业航天"],
+    },
+    {
+        "name": "gold",
+        "sector_keywords": ["黄金", "有色"],
+        "name_keywords": ["黄金", "有色"],
+    },
+    {
+        "name": "consumer",
+        "sector_keywords": ["白酒", "消费"],
+        "name_keywords": ["白酒", "消费"],
+    },
+]
+
+
+def _theme_name_bonus(matched_sector: str, fund_name: str) -> int:
+    """Rule 6:matched_sector 命中某个主题 group,且 fund_name 含该 group
+    任一 name_keyword → +1。"""
+    for theme in THEME_GROUPS:
+        in_theme = any(kw in matched_sector for kw in theme["sector_keywords"])
+        if not in_theme:
+            continue
+        if any(kw in fund_name for kw in theme["name_keywords"]):
+            return 1
+    return 0
+
+
+def _compute_purity_score(
+    related_sectors: list[str], matched_sector: str, fund_name: str
+) -> int:
+    """规则(spec):
+        1. related_sectors 长度 1     → base 9
+        2. 长度 2                     → base 8
+        3. 长度 3                     → base 7
+        4. 长度 ≥ 4                   → base 6
+        5. matched_sector 出现在 fund_name 中(子串) → +1
+        6. matched_sector 属于某主题 + fund_name 含该主题同义词 → +1
+        最终封顶 9。
+
+    matched_sector 必然已在 related_sectors 中(由调用方保证)。
+    """
+    n = len(related_sectors)
+    if n <= 1:
+        base = 9
+    elif n == 2:
+        base = 8
+    elif n == 3:
+        base = 7
+    else:
+        base = 6
+
+    bonus = 0
+    # rule 5
+    if matched_sector and matched_sector in (fund_name or ""):
+        bonus += 1
+    # rule 6
+    bonus += _theme_name_bonus(matched_sector, fund_name or "")
+
+    return min(9, base + bonus)
+
+
 def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
     """构建主力雷达 — 服务层产出 dict,API 层负责 Decimal 转换。
 
@@ -172,6 +265,9 @@ def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
 
         rank, sector_row, matched_label = best
         score = _compute_score(rank, sector_row.main_inflow_wan_x10000)
+        purity = _compute_purity_score(
+            related, matched_label, fund.fund_name or ""
+        )
         is_held = fund.fund_code in holding_codes
 
         item: dict[str, Any] = {
@@ -183,6 +279,7 @@ def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
             "sector_main_inflow_wan_x10000": sector_row.main_inflow_wan_x10000,
             "sector_change_pct_x10000": sector_row.change_pct_x10000,
             "score": score,
+            "purity_score": purity,
             "badge": "已持有" if is_held else "候选",
         }
 
@@ -191,9 +288,11 @@ def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
         else:
             candidates_items.append(item)
 
-    # 6. 各自按 (score DESC, sector_rank ASC) 排,取前 n
-    def _sort_key(it: dict[str, Any]) -> tuple[int, int]:
-        return (-it["score"], it["sector_rank"])
+    # 6. 各自按 (score DESC, purity_score DESC, sector_rank ASC, fund_code ASC) 排,取前 n
+    # PR17 改:加入 purity_score 作为同一板块强度内的区分键 — 让"纯半导体基金"
+    # 排在"半导体只是 related 标签之一的混合基金"前面。fund_code ASC 是稳定排序兜底。
+    def _sort_key(it: dict[str, Any]) -> tuple[int, int, int, str]:
+        return (-it["score"], -it["purity_score"], it["sector_rank"], it["fund_code"])
 
     holdings_items.sort(key=_sort_key)
     candidates_items.sort(key=_sort_key)

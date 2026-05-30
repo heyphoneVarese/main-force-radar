@@ -271,6 +271,7 @@ def _to_radar_item(raw: dict) -> RadarFundItem:
             if cp_x10000 is not None else None
         ),
         score=raw["score"],
+        purity_score=raw["purity_score"],
         badge=raw["badge"],
     )
 

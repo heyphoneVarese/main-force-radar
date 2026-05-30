@@ -151,7 +151,8 @@ export interface RadarFundItem {
   sector_main_inflow_wan: string     // Decimal 万元
   sector_main_inflow_yi: string      // Decimal 亿元(已 / 10000)
   sector_change_pct: string | null   // Decimal 百分数
-  score: number                      // 0..9
+  score: number                      // 0..9 板块强势分
+  purity_score: number               // 0..9 基金主题贴合度(PR17)
   badge: '已持有' | '候选'
 }
 
