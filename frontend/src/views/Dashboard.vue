@@ -4,6 +4,7 @@ import { dashboardApi, type SectorTypeFilter } from '../api/client'
 import AiSummary from '../components/dashboard/AiSummary.vue'
 import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
+import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
@@ -134,7 +135,15 @@ onMounted(() => {
       @change-type="onSectorsTypeChange"
     />
 
-    <!-- 4. 我的持仓映射 -->
+    <!-- 4. 最强 20 基金候选(市场维度,不过滤持仓)-->
+    <MarketTopFunds
+      :status="fundsStatus"
+      :data="fundsData"
+      :error="fundsError"
+      :holding-codes="holdingCodes"
+    />
+
+    <!-- 5. 我的持仓映射(客户端过滤至 holdings)-->
     <HoldingMappings
       :status="fundsStatus"
       :data="fundsData"
