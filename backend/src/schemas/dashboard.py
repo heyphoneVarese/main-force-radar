@@ -186,6 +186,27 @@ class TopFundsResponse(BaseModel):
     )
 
 
+class IntradayTopSectorsResponse(BaseModel):
+    """盘中实时 Top N 板块快照(PR15)。
+
+    跟 TopSectorsResponse 区别:多一个 `snapshot_time`(精确到分钟)。
+    `sectors` 复用 SectorFlowResponse 形态,数值字段语义一致(int_to_*)。
+
+    空库 → trade_date=null, snapshot_time=null, sectors=[]。
+    """
+
+    trade_date: date | None = Field(
+        description="最新有 snapshot 的交易日(snapshot_time 的日期部分);空 → null"
+    )
+    snapshot_time: datetime | None = Field(
+        description="最新 snapshot 时刻(Asia/Shanghai 精确到分钟);空 → null"
+    )
+    sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
+    sectors: list[SectorFlowResponse] = Field(
+        description="按 main_inflow_wan 降序排;最多 n 条(默认 20)"
+    )
+
+
 class AISummaryResponse(BaseModel):
     """AI 一句话结论(24h TTL 缓存)。
 

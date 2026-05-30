@@ -123,6 +123,29 @@ class SignalScheduler:
             fetch_cron,
         )
 
+        # 1 个盘中实时数据采集 job(Phase 5.1 PR15)
+        # cron 设宽点(9-11/13-14 每 10 min),回调内部 is_in_trading_window
+        # 二次过滤:只有 9:35-11:30 / 13:00-14:55 区间内才真正采集。
+        # 这样 cron 简单 + 时间窗精确。集合竞价 9:30-9:35 不采(数据不稳)。
+        intraday_cron = {
+            "day_of_week": "mon-fri",
+            "hour": "9-11,13-14",
+            "minute": "*/10",
+        }
+        self.scheduler.add_job(
+            func=self._make_intraday_fetch_callable(),
+            trigger=CronTrigger(timezone=self.timezone, **intraday_cron),
+            id="intraday_fetch",
+            name="盘中实时数据采集",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=60,  # 1 min — 盘中错过就错过,不补
+        )
+        logger.info(
+            "Registered job: id=intraday_fetch cron=%s (10min 内,9:35-11:30/13:00-14:55 才入库)",
+            intraday_cron,
+        )
+
     def _make_fetch_callable(self) -> Callable[[], None]:
         """daily_fetch 顶级吞掉异常 — 跟 push job 同样的安全契约。"""
         def _run():
@@ -148,6 +171,33 @@ class SignalScheduler:
                 "Job [daily_fetch] 内部失败但已吞掉: %s: %s",
                 type(e).__name__, e,
             )
+
+    def _make_intraday_fetch_callable(self) -> Callable[[], None]:
+        """盘中采集回调。runtime 二次过滤交易窗口(集合竞价不采)。
+        顶级吞异常,跟其它 job 同样契约。"""
+        def _run():
+            try:
+                # 延迟 import 避免 scheduler module 加载时拉重链路
+                from src.services.intraday_fetcher import (
+                    fetch_and_store_intraday,
+                    is_in_trading_window,
+                )
+
+                if not is_in_trading_window():
+                    logger.debug(
+                        "Job [intraday_fetch] 跳过 — 当前不在交易窗口"
+                    )
+                    return
+                with SessionLocal() as session:
+                    stats = fetch_and_store_intraday(session)
+                logger.info("Job [intraday_fetch] 完成: %s", stats)
+            except Exception as e:
+                logger.error(
+                    "Job intraday_fetch 顶级异常吞掉: %s: %s",
+                    type(e).__name__, e,
+                )
+
+        return _run
 
     def _make_job_callable(self, config: dict) -> Callable[[], None]:
         """生成 cron 调用的闭包(捕获 config)+ 顶级异常吞掉。"""

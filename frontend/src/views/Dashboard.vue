@@ -10,6 +10,7 @@ import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
   HoldingsSummary,
+  IntradayTopSectors,
   MarketSnapshot,
   TopFunds,
   TopSectors,
@@ -34,6 +35,13 @@ const sectorsStatus = ref<Status>('loading')
 const sectorsData = ref<TopSectors | null>(null)
 const sectorsError = ref('')
 const sectorsType = ref<SectorTypeFilter>('industry')
+
+// PR15:盘中实时数据 + mode 状态
+const intradaySectorsStatus = ref<Status>('loading')
+const intradaySectorsData = ref<IntradayTopSectors | null>(null)
+const intradaySectorsError = ref('')
+const sectorsMode = ref<'intraday' | 'daily'>('daily')  // 默认安全;intraday 拿到 → 自动切
+const userPickedMode = ref(false)  // 用户手动切过 → 不再自动覆盖
 
 const holdingsStatus = ref<Status>('loading')
 const holdingsData = ref<HoldingsSummary | null>(null)
@@ -76,10 +84,37 @@ function loadSectors(t: SectorTypeFilter): Promise<void> {
   )
 }
 
+// PR15:盘中实时,跟 daily 同样的 tab 切换语义
+function loadIntradaySectors(t: SectorTypeFilter): Promise<void> {
+  intradaySectorsStatus.value = 'loading'
+  return dashboardApi.intradayTopSectors(20, t).then(
+    (d) => {
+      intradaySectorsData.value = d
+      intradaySectorsStatus.value = 'ready'
+      // 默认逻辑:用户没手动切过 → intraday 有今日数据就自动切 intraday
+      if (!userPickedMode.value && (d.sectors?.length ?? 0) > 0) {
+        sectorsMode.value = 'intraday'
+      }
+    },
+    (e) => {
+      intradaySectorsError.value = _errMsg(e)
+      intradaySectorsStatus.value = 'error'
+    },
+  )
+}
+
 function onSectorsTypeChange(t: SectorTypeFilter): void {
   if (t === sectorsType.value) return
   sectorsType.value = t
+  // 两个数据源一起切(intraday 库可能某些 type 也有数据)
   void loadSectors(t)
+  void loadIntradaySectors(t)
+}
+
+function onSectorsModeChange(m: 'intraday' | 'daily'): void {
+  if (m === sectorsMode.value) return
+  sectorsMode.value = m
+  userPickedMode.value = true
 }
 
 onMounted(() => {
@@ -89,6 +124,7 @@ onMounted(() => {
       (e) => { marketError.value = _errMsg(e); marketStatus.value = 'error' },
     ),
     loadSectors(sectorsType.value),
+    loadIntradaySectors(sectorsType.value),
     dashboardApi.holdingsSummary().then(
       (d) => { holdingsData.value = d; holdingsStatus.value = 'ready' },
       (e) => { holdingsError.value = _errMsg(e); holdingsStatus.value = 'error' },
@@ -126,13 +162,18 @@ onMounted(() => {
     <!-- 2. AI 一句话结论 -->
     <AiSummary :status="aiStatus" :data="aiData" :error="aiError" />
 
-    <!-- 3. Top 20 板块 -->
+    <!-- 3. Top 20 板块(PR15 加 intraday 模式) -->
     <TopSectorsCard
       :status="sectorsStatus"
       :data="sectorsData"
       :error="sectorsError"
+      :intraday-status="intradaySectorsStatus"
+      :intraday-data="intradaySectorsData"
+      :intraday-error="intradaySectorsError"
       :current-type="sectorsType"
+      :current-mode="sectorsMode"
       @change-type="onSectorsTypeChange"
+      @change-mode="onSectorsModeChange"
     />
 
     <!-- 4. 最强 20 基金候选(市场维度,不过滤持仓)-->

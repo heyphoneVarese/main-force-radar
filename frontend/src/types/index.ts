@@ -84,6 +84,13 @@ export interface TopSectors {
   sectors: SectorFlow[]
 }
 
+export interface IntradayTopSectors {
+  trade_date: string | null
+  snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻
+  sector_type: 'industry' | 'concept' | 'all'
+  sectors: SectorFlow[]
+}
+
 export interface HoldingSignal {
   fund_code: string
   fund_name: string | null

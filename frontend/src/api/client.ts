@@ -7,6 +7,7 @@ import type {
   HoldingCreate,
   HoldingsSummary,
   HoldingUpdate,
+  IntradayTopSectors,
   MarketSnapshot,
   TopFunds,
   TopSectors,
@@ -76,6 +77,10 @@ export const dashboardApi = {
   topSectors: (n: number = 20, sectorType: SectorTypeFilter = 'industry') =>
     jsonFetch<TopSectors>(
       `${BASE}/dashboard/sectors/top?n=${n}&sector_type=${sectorType}`
+    ),
+  intradayTopSectors: (n: number = 20, sectorType: SectorTypeFilter = 'industry') =>
+    jsonFetch<IntradayTopSectors>(
+      `${BASE}/dashboard/intraday/sectors/top?n=${n}&sector_type=${sectorType}`
     ),
   holdingsSummary: () =>
     jsonFetch<HoldingsSummary>(`${BASE}/dashboard/holdings-summary`),

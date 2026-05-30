@@ -61,14 +61,16 @@ def test_jobs_config_every_job_has_required_fields():
 # ============================================================
 
 
-def test_register_jobs_registers_5_jobs():
-    """4 个推送 job + 1 个 daily_fetch 采集 job = 5 个。"""
+def test_register_jobs_registers_6_jobs():
+    """4 个推送 job + 1 个 daily_fetch + 1 个 intraday_fetch(PR15)= 6 个。"""
     s = SignalScheduler()
     s.register_jobs()
-    assert len(s.scheduler.get_jobs()) == 5
-    # 5 个 job 的 id 全部到位
+    assert len(s.scheduler.get_jobs()) == 6
     job_ids = {job.id for job in s.scheduler.get_jobs()}
-    assert job_ids == {"pre_market", "intraday", "close", "weekly", "daily_fetch"}
+    assert job_ids == {
+        "pre_market", "intraday", "close", "weekly",
+        "daily_fetch", "intraday_fetch",
+    }
 
 
 def test_default_timezone_is_asia_shanghai():
@@ -93,7 +95,7 @@ def test_register_jobs_after_start_is_idempotent():
     s.start()
     try:
         s.register_jobs()  # 这次走真去重
-        assert len(s.scheduler.get_jobs()) == 5
+        assert len(s.scheduler.get_jobs()) == 6
     finally:
         s.shutdown()
 

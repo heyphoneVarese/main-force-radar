@@ -19,11 +19,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db import get_session
-from src.models import MarketIndexDaily, SectorFlowDaily
+from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
     HoldingSignalResponse,
     HoldingsSummaryResponse,
+    IntradayTopSectorsResponse,
     MarketIndexResponse,
     MarketSnapshotResponse,
     MatchedSector,
@@ -152,6 +153,91 @@ def get_top_sectors(
         trade_date=latest_date,
         sector_type=sector_type,
         sectors=[_to_sector_response(r, i + 1) for i, r in enumerate(rows)],
+    )
+
+
+# =====================================================================
+# 盘中实时 Top 板块(PR15 — 新表 intraday_sector_flow)
+# =====================================================================
+
+
+def _to_intraday_sector_response(
+    row: IntradaySectorFlow, rank: int
+) -> SectorFlowResponse:
+    """ORM 行 → Pydantic。复用 SectorFlowResponse 形态(rank + 数值字段)。"""
+    return SectorFlowResponse(
+        rank=rank,
+        sector_code=row.sector_code,
+        sector_name=row.sector_name,
+        sector_type=row.sector_type,
+        main_inflow_wan=int_to_wan_yuan(row.main_inflow_wan_x10000),
+        main_inflow_pct=(
+            int_to_pct(row.main_inflow_pct_x10000)
+            if row.main_inflow_pct_x10000 is not None
+            else None
+        ),
+        change_pct=(
+            int_to_pct(row.change_pct_x10000)
+            if row.change_pct_x10000 is not None
+            else None
+        ),
+    )
+
+
+@router.get("/intraday/sectors/top", response_model=IntradayTopSectorsResponse)
+def get_intraday_top_sectors(
+    n: int = Query(20, ge=1, le=100, description="Top N(1..100,默认 20)"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry",
+        description="过滤板块类型;all = 不过滤,行业/概念混排"
+    ),
+    db: Session = Depends(get_session),
+) -> IntradayTopSectorsResponse:
+    """盘中实时 Top N 板块(最新 snapshot,按主力净流入降序)。
+
+    - 取 intraday_sector_flow 最大的 snapshot_time(精确到分钟)
+    - 同一 snapshot 内所有板块按 main_inflow_wan_x10000 DESC 排
+    - 空库(集合竞价前 / 周末 / 还没采过)→ trade_date=null,
+      snapshot_time=null, sectors=[],HTTP 200
+
+    跟 /sectors/top(daily)是平行端点 — 此端点 100% 不影响 daily 行为。
+    """
+    latest_snapshot = db.scalar(
+        select(IntradaySectorFlow.snapshot_time)
+        .order_by(IntradaySectorFlow.snapshot_time.desc())
+        .limit(1)
+    )
+    if latest_snapshot is None:
+        return IntradayTopSectorsResponse(
+            trade_date=None,
+            snapshot_time=None,
+            sector_type=sector_type,
+            sectors=[],
+        )
+
+    stmt = select(IntradaySectorFlow).where(
+        IntradaySectorFlow.snapshot_time == latest_snapshot
+    )
+    if sector_type != "all":
+        stmt = stmt.where(IntradaySectorFlow.sector_type == sector_type)
+    stmt = stmt.order_by(
+        IntradaySectorFlow.main_inflow_wan_x10000.desc()
+    ).limit(n)
+
+    rows = db.scalars(stmt).all()
+    # trade_date 取 snapshot_time 的日期部分(snapshot 自带,但更省一次查询)
+    trade_date_val = (
+        rows[0].trade_date if rows else latest_snapshot.date()
+    )
+
+    return IntradayTopSectorsResponse(
+        trade_date=trade_date_val,
+        snapshot_time=latest_snapshot,
+        sector_type=sector_type,
+        sectors=[
+            _to_intraday_sector_response(r, i + 1)
+            for i, r in enumerate(rows)
+        ],
     )
 
 
