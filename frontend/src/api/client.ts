@@ -1,5 +1,15 @@
 // 极简 fetch 封装。后端错误 detail 透传到 Error.message,UI 层用 ElMessage 展示。
-import type { Fund, Holding, HoldingCreate, HoldingUpdate } from '../types'
+import type {
+  AISummary,
+  Fund,
+  Holding,
+  HoldingCreate,
+  HoldingsSummary,
+  HoldingUpdate,
+  MarketSnapshot,
+  TopFunds,
+  TopSectors,
+} from '../types'
 
 const BASE = '/api' // vite proxy 转到 localhost:8000
 
@@ -46,4 +56,24 @@ export const holdingsApi = {
 
 export const fundsApi = {
   list: () => jsonFetch<Fund[]>(`${BASE}/funds`),
+}
+
+// ===== Dashboard 5 个端点(Phase 5.1 PR7) =====
+//
+// 跟后端 Pydantic 约定:整数 money / pct 已经在后端转 Decimal 字符串,
+// 前端只负责字符串 → Number 显示。空数据时 trade_date=null,子列表=[]。
+
+export type SectorTypeFilter = 'industry' | 'concept' | 'all'
+
+export const dashboardApi = {
+  market: () => jsonFetch<MarketSnapshot>(`${BASE}/dashboard/market`),
+  topSectors: (n: number = 20, sectorType: SectorTypeFilter = 'industry') =>
+    jsonFetch<TopSectors>(
+      `${BASE}/dashboard/sectors/top?n=${n}&sector_type=${sectorType}`
+    ),
+  holdingsSummary: () =>
+    jsonFetch<HoldingsSummary>(`${BASE}/dashboard/holdings-summary`),
+  topFunds: (n: number = 20) =>
+    jsonFetch<TopFunds>(`${BASE}/dashboard/funds/top?n=${n}`),
+  aiSummary: () => jsonFetch<AISummary>(`${BASE}/dashboard/ai-summary`),
 }

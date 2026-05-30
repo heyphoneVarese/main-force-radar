@@ -38,3 +38,83 @@ export interface HoldingUpdate {
   bought_at?: string
   note?: string | null
 }
+
+// ===== Dashboard responses (镜像 backend Pydantic) =====
+// 所有 Decimal 字段都是 string 透传(跟 Holding.cost_nav 一致语义)。
+// change_pct / main_inflow_pct 是 fraction("0.0066" = 0.66%),前端 ×100 显示。
+
+export interface MarketIndex {
+  index_code: string                 // sh000001 / sz399001 / sz399006 / sh000300
+  index_name: string
+  trade_date: string                 // "YYYY-MM-DD"
+  close: string                      // Decimal 点位
+  change_pct: string                 // fraction
+  turnover_wan: string | null        // Decimal 万元;sina 源无 amount 时 null
+}
+
+export interface MarketSnapshot {
+  trade_date: string | null
+  indices: MarketIndex[]
+}
+
+export interface SectorFlow {
+  rank: number
+  sector_code: string                // BK0727
+  sector_name: string
+  sector_type: string                // industry / concept / region
+  main_inflow_wan: string            // Decimal 万元;可负
+  main_inflow_pct: string | null     // fraction
+  change_pct: string | null
+}
+
+export interface TopSectors {
+  trade_date: string | null
+  sector_type: 'industry' | 'concept' | 'all'
+  sectors: SectorFlow[]
+}
+
+export interface HoldingSignal {
+  fund_code: string
+  fund_name: string | null
+  related_sectors: string[]
+  signal_type: 'bullish' | 'bearish' | 'warning' | 'neutral' | 'not_applicable'
+  persistence_score: number          // 0-9
+  via_sector: string | null          // BK code
+  main_inflow_wan: string | null     // Decimal 万元
+  change_pct: string | null          // fraction
+  reason: string
+}
+
+export interface HoldingsSummary {
+  trade_date: string | null
+  holdings: HoldingSignal[]
+}
+
+export interface MatchedSector {
+  sector_code: string
+  sector_name: string
+}
+
+export interface TopFund {
+  rank: number
+  fund_code: string
+  fund_name: string
+  related_sectors: string[]
+  matched_sectors: MatchedSector[]
+  score: number                      // 0-9 持续性
+  main_inflow_wan: string            // Decimal 万元
+  change_pct: string | null
+  reason: string
+}
+
+export interface TopFunds {
+  trade_date: string | null
+  funds: TopFund[]
+}
+
+export interface AISummary {
+  trade_date: string | null
+  summary: string
+  generated_at: string               // ISO datetime
+  cached: boolean
+}
