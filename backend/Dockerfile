@@ -31,9 +31,12 @@ RUN pip install --no-cache-dir uv==0.5.11
 #   禁止 runtime 偷偷改 lockfile / 重新下依赖。否则容器启动时 uv run 会
 #   "补齐"dev 组(black/pytest/ruff),撞超时 → uvicorn 起不来。
 #
-# UV_HTTP_TIMEOUT=120
+# UV_HTTP_TIMEOUT=300
 #   默认 30s 在国内 VPS 拉 pandas/scipy/akshare 这种大包必超时。
-#   抬到 120s 给慢网兜底(本机走代理也吃得消)。
+#   2026-05-30 实测 120s 在 akracer 0.0.14(akshare 依赖,10MB sdist,uv.lock
+#   source 写死 pypi.org,UV_FROZEN 下走不了阿里镜像)上仍超时。抬到 300s
+#   = 5 min,够 10MB 在 33KB/s 慢网下完成。注:此 env 是单次 HTTP 请求超时,
+#   非总时长,正常包不会拖慢整体构建。
 #
 # UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/
 #   走阿里云镜像,跟阿里云 VPS 内网,延迟通常 < 50ms。同步 PyPI 上游,
@@ -52,7 +55,7 @@ ENV UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_FROZEN=1 \
-    UV_HTTP_TIMEOUT=120 \
+    UV_HTTP_TIMEOUT=300 \
     UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple/ \
     UV_CONCURRENT_DOWNLOADS=1
 
