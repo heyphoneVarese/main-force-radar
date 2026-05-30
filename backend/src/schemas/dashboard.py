@@ -42,3 +42,40 @@ class MarketSnapshotResponse(BaseModel):
     indices: list[MarketIndexResponse] = Field(
         description="按 data_fetcher.DEFAULT_INDICES 顺序排列;最多 4 条"
     )
+
+
+class SectorFlowResponse(BaseModel):
+    """单个板块的资金流(sector_flow_daily 一行)。
+
+    所有数值字段用 Decimal,语义与 int_to_wan_yuan / int_to_pct 反算一致。
+    """
+
+    rank: int = Field(ge=1, description="按 main_inflow_wan 降序的名次(1-based)")
+    sector_code: str = Field(description="如 BK0428(电池);concept/region 同表")
+    sector_name: str
+    sector_type: str = Field(description="industry / concept / region")
+    main_inflow_wan: Decimal = Field(
+        description="主力净流入,万元;负值=净流出"
+    )
+    main_inflow_pct: Decimal | None = Field(
+        default=None,
+        description="主力净流入占比(小数,0.083 = 8.3%);akshare 偶尔为 null"
+    )
+    change_pct: Decimal | None = Field(
+        default=None,
+        description="今日涨跌幅(小数,0.0234 = 2.34%);akshare 偶尔为 null"
+    )
+
+
+class TopSectorsResponse(BaseModel):
+    """最新交易日 Top N 板块。
+
+    平行 MarketSnapshotResponse:trade_date 顶层冗余,空库时为 null。
+    sector_type 回显请求参数(industry / concept / all),前端可据此渲染 tab。
+    """
+
+    trade_date: date | None = Field(description="最新有数据的交易日;空库 → null")
+    sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
+    sectors: list[SectorFlowResponse] = Field(
+        description="按 main_inflow_wan 降序排;最多 n 条(默认 20)"
+    )

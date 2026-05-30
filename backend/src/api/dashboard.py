@@ -12,13 +12,20 @@ R 红线兼容:
 - GET /api/dashboard/ai-summary
 """
 
-from fastapi import APIRouter, Depends
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db import get_session
-from src.models import MarketIndexDaily
-from src.schemas.dashboard import MarketIndexResponse, MarketSnapshotResponse
+from src.models import MarketIndexDaily, SectorFlowDaily
+from src.schemas.dashboard import (
+    MarketIndexResponse,
+    MarketSnapshotResponse,
+    SectorFlowResponse,
+    TopSectorsResponse,
+)
 from src.services.data_fetcher import DEFAULT_INDICES
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 
@@ -71,4 +78,69 @@ def get_market_snapshot(db: Session = Depends(get_session)) -> MarketSnapshotRes
     return MarketSnapshotResponse(
         trade_date=latest_date,
         indices=[_to_index_response(r) for r in rows_sorted],
+    )
+
+
+# =====================================================================
+# Top 板块(按主力净流入降序)
+# =====================================================================
+
+
+def _to_sector_response(row: SectorFlowDaily, rank: int) -> SectorFlowResponse:
+    """ORM 行 → Pydantic。R1 整数全走 money 反算;nullable pct 字段保留 None。"""
+    return SectorFlowResponse(
+        rank=rank,
+        sector_code=row.sector_code,
+        sector_name=row.sector_name,
+        sector_type=row.sector_type,
+        main_inflow_wan=int_to_wan_yuan(row.main_inflow_wan_x10000),
+        main_inflow_pct=(
+            int_to_pct(row.main_inflow_pct_x10000)
+            if row.main_inflow_pct_x10000 is not None
+            else None
+        ),
+        change_pct=(
+            int_to_pct(row.change_pct_x10000)
+            if row.change_pct_x10000 is not None
+            else None
+        ),
+    )
+
+
+@router.get("/sectors/top", response_model=TopSectorsResponse)
+def get_top_sectors(
+    n: int = Query(20, ge=1, le=100, description="返回 Top N(1..100,默认 20)"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry",
+        description="过滤板块类型;all = 不过滤,行业/概念混排"
+    ),
+    db: Session = Depends(get_session),
+) -> TopSectorsResponse:
+    """Top N 板块(最新交易日,按主力净流入降序)。
+
+    - 取整张 sector_flow_daily 最大的 trade_date(可能跟 market_index_daily 不同步)
+    - 该日所有板块按 main_inflow_wan_x10000 DESC 排
+    - 负流入会沉底,Top N 就是"强势板块"
+    - 空库 → {"trade_date": null, "sector_type": <param>, "sectors": []} + HTTP 200
+    """
+    latest_date = db.scalar(
+        select(SectorFlowDaily.trade_date)
+        .order_by(SectorFlowDaily.trade_date.desc())
+        .limit(1)
+    )
+    if latest_date is None:
+        return TopSectorsResponse(
+            trade_date=None, sector_type=sector_type, sectors=[]
+        )
+
+    stmt = select(SectorFlowDaily).where(SectorFlowDaily.trade_date == latest_date)
+    if sector_type != "all":
+        stmt = stmt.where(SectorFlowDaily.sector_type == sector_type)
+    stmt = stmt.order_by(SectorFlowDaily.main_inflow_wan_x10000.desc()).limit(n)
+
+    rows = db.scalars(stmt).all()
+    return TopSectorsResponse(
+        trade_date=latest_date,
+        sector_type=sector_type,
+        sectors=[_to_sector_response(r, i + 1) for i, r in enumerate(rows)],
     )
