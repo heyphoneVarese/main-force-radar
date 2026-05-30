@@ -666,3 +666,255 @@ def test_holdings_summary_bearish_signal_with_negative_inflow(db_session, client
     # -1_800_000_000 / 10000 = -180_000 万元
     assert Decimal(h["main_inflow_wan"]) == Decimal("-180000")
     assert Decimal(h["change_pct"]) == Decimal("-0.015")
+
+
+# =====================================================================
+# /api/dashboard/funds/top
+# =====================================================================
+
+
+def _mk_flow_row(
+    sector_code: str,
+    sector_name: str,
+    trade_date: date,
+    main_inflow_wan_x10000: int,
+    change_pct_x10000: int | None = None,
+    main_inflow_pct_x10000: int | None = None,
+    sector_type: str = "industry",
+) -> SectorFlowDaily:
+    return SectorFlowDaily(
+        sector_code=sector_code,
+        sector_name=sector_name,
+        sector_type=sector_type,
+        trade_date=trade_date,
+        main_inflow_wan_x10000=main_inflow_wan_x10000,
+        main_inflow_pct_x10000=main_inflow_pct_x10000,
+        change_pct_x10000=change_pct_x10000,
+    )
+
+
+# ---- 空状态 ------------------------------------------------------
+
+
+def test_funds_top_empty_db_returns_empty(client):
+    """完全空库 → 200 + {trade_date: null, funds: []}。"""
+    resp = client.get("/api/dashboard/funds/top")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trade_date"] is None
+    assert body["funds"] == []
+
+
+def test_funds_top_funds_exist_but_no_sector_flow_returns_empty(db_session, client):
+    """funds 表非空但 sector_flow_daily 空 → 没排序键 → funds=[]。"""
+    db_session.add(_mk_fund("F001", "测试基金", related_sectors=["半导体"]))
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    assert body["trade_date"] is None
+    assert body["funds"] == []
+
+
+# ---- 过滤策略(无数据不上榜)-----------------------------------
+
+
+def test_funds_top_excludes_funds_without_related_sectors(db_session, client):
+    """QDII 类 fund(related_sectors=None)不返回。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_QDII", "纳指基金", related_sectors=None),
+        _mk_fund("F_OK", "半导体基金", related_sectors=["半导体"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_flow_row("BK0727", "半导体", d, 12_000_000_000, change_pct_x10000=312),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    codes = [f["fund_code"] for f in body["funds"]]
+    assert codes == ["F_OK"]
+
+
+def test_funds_top_excludes_funds_with_unmapped_labels(db_session, client):
+    """fund.related_sectors 有标签,但 sector_aliases 没建过条目 → 不上榜。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_UNMAPPED", "冷门标签基金", related_sectors=["元宇宙"]),
+        _mk_fund("F_OK", "半导体基金", related_sectors=["半导体"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        # 故意不加 "元宇宙" alias
+        _mk_flow_row("BK0727", "半导体", d, 12_000_000_000),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    codes = [f["fund_code"] for f in body["funds"]]
+    assert codes == ["F_OK"]
+
+
+def test_funds_top_excludes_funds_with_no_flow_data_for_mapped_sectors(
+    db_session, client
+):
+    """sector 映射有,但当日 sector_flow_daily 这个 BK 没数据 → 不上榜。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_NODATA", "医药基金", related_sectors=["医药"]),
+        _mk_fund("F_OK", "半导体基金", related_sectors=["半导体"]),
+        _mk_alias("医药", "BK0719", "医药生物"),  # alias 有
+        _mk_alias("半导体", "BK0727", "半导体"),
+        # 故意只造半导体 sector_flow,不造医药的
+        _mk_flow_row("BK0727", "半导体", d, 12_000_000_000),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    codes = [f["fund_code"] for f in body["funds"]]
+    assert codes == ["F_OK"]
+
+
+# ---- 主路径:排序 + 字段 ----------------------------------------
+
+
+@pytest.fixture
+def seed_top_funds(db_session):
+    """3 只基金 → 3 个不同强度的板块,验证排序。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_STRONG", "半导体基金", related_sectors=["半导体"]),
+        _mk_fund("F_MID", "证券基金", related_sectors=["证券"]),
+        _mk_fund("F_WEAK", "光伏基金", related_sectors=["光伏设备"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_alias("证券", "BK0479", "证券"),
+        _mk_alias("光伏设备", "BK0429", "光伏设备"),
+        _mk_flow_row("BK0727", "半导体", d, 12_000_000_000, change_pct_x10000=312),
+        _mk_flow_row("BK0479", "证券", d, 3_000_000_000, change_pct_x10000=180),
+        _mk_flow_row("BK0429", "光伏设备", d, -1_800_000_000, change_pct_x10000=-150),
+    ])
+    db_session.commit()
+    return d
+
+
+def test_funds_top_orders_by_via_inflow_desc(client, seed_top_funds):
+    body = client.get("/api/dashboard/funds/top").json()
+    assert body["trade_date"] == "2026-05-30"
+    assert [f["fund_code"] for f in body["funds"]] == ["F_STRONG", "F_MID", "F_WEAK"]
+    assert [f["rank"] for f in body["funds"]] == [1, 2, 3]
+
+
+def test_funds_top_negative_inflow_sinks_to_bottom(client, seed_top_funds):
+    """负流入基金排在末位。"""
+    body = client.get("/api/dashboard/funds/top").json()
+    last = body["funds"][-1]
+    assert last["fund_code"] == "F_WEAK"
+    assert Decimal(last["main_inflow_wan"]) == Decimal("-180000")
+    assert Decimal(last["change_pct"]) == Decimal("-0.015")
+
+
+def test_funds_top_respects_n_param(client, seed_top_funds):
+    body = client.get("/api/dashboard/funds/top?n=2").json()
+    assert len(body["funds"]) == 2
+    assert [f["rank"] for f in body["funds"]] == [1, 2]
+    assert body["funds"][0]["fund_code"] == "F_STRONG"
+
+
+def test_funds_top_decimal_decoding(client, seed_top_funds):
+    body = client.get("/api/dashboard/funds/top").json()
+    top = body["funds"][0]
+    # 12_000_000_000 / 10000 = 1_200_000 万元(= 120 亿元)
+    assert Decimal(top["main_inflow_wan"]) == Decimal("1200000")
+    # 312 / 10000 = 0.0312
+    assert Decimal(top["change_pct"]) == Decimal("0.0312")
+
+
+# ---- 多板块基金:via 取 max,matched_sectors 全列 ---------------
+
+
+def test_funds_top_multi_sector_picks_max_inflow_as_via(db_session, client):
+    """一只基金映射到 2 个板块 → via_sector 取流入最大的那个;
+    matched_sectors 含两个。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_DUAL", "AI+半导体基金", related_sectors=["半导体", "AI算力"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_alias("AI算力", "BK0739", "AI算力"),
+        # AI 流入 8e9,半导体 5e9 → via 应该是 AI
+        _mk_flow_row("BK0727", "半导体", d, 5_000_000_000, change_pct_x10000=200),
+        _mk_flow_row("BK0739", "AI算力", d, 8_000_000_000, change_pct_x10000=280),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    f = body["funds"][0]
+    # via = AI算力 → main_inflow_wan = 8e9/1e4 = 800_000
+    assert Decimal(f["main_inflow_wan"]) == Decimal("800000")
+    assert Decimal(f["change_pct"]) == Decimal("0.028")
+    # matched_sectors 含两个,且带 sector_name
+    codes = {m["sector_code"] for m in f["matched_sectors"]}
+    assert codes == {"BK0727", "BK0739"}
+    names = {m["sector_name"] for m in f["matched_sectors"]}
+    assert names == {"半导体", "AI算力"}
+    # related_sectors 透传原始中文标签
+    assert set(f["related_sectors"]) == {"半导体", "AI算力"}
+    # reason 含 via_sector 名 + 持续性
+    assert "AI算力" in f["reason"] and "BK0739" in f["reason"]
+
+
+def test_funds_top_matched_sectors_excludes_unfeed_codes(db_session, client):
+    """fund 映射到 2 个 BK,但只有 1 个当日有 sector_flow → matched_sectors 只列那个 1 个。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_PARTIAL", "部分映射基金", related_sectors=["半导体", "医药"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_alias("医药", "BK0719", "医药生物"),
+        _mk_flow_row("BK0727", "半导体", d, 5_000_000_000),  # 只有半导体有数据
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    f = body["funds"][0]
+    assert [m["sector_code"] for m in f["matched_sectors"]] == ["BK0727"]
+    # related_sectors 仍是原始两个(没数据的也展示)
+    assert set(f["related_sectors"]) == {"半导体", "医药"}
+
+
+# ---- 多日数据 — 只用最新 ----------------------------------------
+
+
+def test_funds_top_uses_only_latest_sector_flow_date(db_session, client):
+    """sector_flow_daily 有 d1 d2 两天 → 只用 d2 的数据;旧日 d1 不污染。"""
+    d1, d2 = date(2026, 5, 29), date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_A", "基金 A", related_sectors=["半导体"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_flow_row("BK0727", "半导体", d1, 100_000_000_000),  # d1 假设巨大
+        _mk_flow_row("BK0727", "半导体", d2, 1_000_000_000),    # d2 较小
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    assert body["trade_date"] == "2026-05-30"
+    # 用 d2 的 1_000_000_000 / 10000 = 100_000 万元;不应用 d1 的巨值
+    assert Decimal(body["funds"][0]["main_inflow_wan"]) == Decimal("100000")
+
+
+# ---- score:多日数据 → 持续性 > 0 -----------------------------
+
+
+def test_funds_top_score_reflects_persistence_when_multi_day_data(db_session, client):
+    """造连续 3 天大额净流入 + 量价齐升 → 持续性 score 应该 > 0。
+    具体值由 SignalEngine 算,这里只断言 > 0。"""
+    d1, d2, d3 = date(2026, 5, 28), date(2026, 5, 29), date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_PERSIST", "强基金", related_sectors=["半导体"]),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        # 3 天连续大额净流入 + 量递增(today > yest)+ change_pct 同号
+        _mk_flow_row("BK0727", "半导体", d1, 5_000_000_000, change_pct_x10000=100),
+        _mk_flow_row("BK0727", "半导体", d2, 8_000_000_000, change_pct_x10000=150),
+        _mk_flow_row("BK0727", "半导体", d3, 12_000_000_000, change_pct_x10000=312),
+    ])
+    db_session.commit()
+    body = client.get("/api/dashboard/funds/top").json()
+    f = body["funds"][0]
+    # base(>100亿=4) + continuity(3天=2) + vol_price(量增同号=2) = 8/9
+    assert f["score"] == 8
+    assert "持续性 8/9" in f["reason"]
+
+
+# ---- 参数校验 ----------------------------------------------------
+
+
+def test_funds_top_invalid_n_rejected(client):
+    assert client.get("/api/dashboard/funds/top?n=0").status_code == 422
+    assert client.get("/api/dashboard/funds/top?n=101").status_code == 422

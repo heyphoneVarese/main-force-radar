@@ -25,9 +25,13 @@ from src.schemas.dashboard import (
     HoldingsSummaryResponse,
     MarketIndexResponse,
     MarketSnapshotResponse,
+    MatchedSector,
     SectorFlowResponse,
+    TopFundResponse,
+    TopFundsResponse,
     TopSectorsResponse,
 )
+from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
@@ -196,3 +200,52 @@ def get_holdings_summary(
         trade_date=raw["trade_date"],
         holdings=holdings_response,
     )
+
+
+# =====================================================================
+# Top N 基金(按映射板块流强度)
+# =====================================================================
+
+
+@router.get("/funds/top", response_model=TopFundsResponse)
+def get_top_funds(
+    n: int = Query(20, ge=1, le=100, description="返回 Top N(1..100,默认 20)"),
+    db: Session = Depends(get_session),
+) -> TopFundsResponse:
+    """Top N 基金(最新交易日,按映射板块主力净流入降序)。
+
+    走 services/dashboard_funds.build_top_funds。本路由层只做 R1 整数 → Decimal
+    反算 + Pydantic 校验。
+
+    过滤策略(无数据不上榜):
+    - funds.related_sectors 为空 → 跳过
+    - 全部 mapped 标签 → 无 BK code → 跳过
+    - mapped BK 都没有当日 sector_flow_daily 数据 → 跳过
+
+    因此 funds 长度 ≤ n;空库 / 全无数据 → 200 + {trade_date: null, funds: []}。
+    """
+    raw = build_top_funds(db, n=n)
+    funds_response = [
+        TopFundResponse(
+            rank=f["rank"],
+            fund_code=f["fund_code"],
+            fund_name=f["fund_name"],
+            related_sectors=f["related_sectors"],
+            matched_sectors=[
+                MatchedSector(
+                    sector_code=m["sector_code"], sector_name=m["sector_name"]
+                )
+                for m in f["matched_sectors"]
+            ],
+            score=f["score"],
+            main_inflow_wan=int_to_wan_yuan(f["main_inflow_wan_x10000"]),
+            change_pct=(
+                int_to_pct(f["change_pct_x10000"])
+                if f["change_pct_x10000"] is not None
+                else None
+            ),
+            reason=f["reason"],
+        )
+        for f in raw["funds"]
+    ]
+    return TopFundsResponse(trade_date=raw["trade_date"], funds=funds_response)

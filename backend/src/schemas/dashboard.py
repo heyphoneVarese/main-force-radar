@@ -131,3 +131,56 @@ class HoldingsSummaryResponse(BaseModel):
     holdings: list[HoldingSignalResponse] = Field(
         description="按 fund_code 字典序排;无持仓 → []"
     )
+
+
+class MatchedSector(BaseModel):
+    """基金当日实际匹配到的 BK 板块(在 sector_flow_daily 有数据)。"""
+
+    sector_code: str = Field(description="如 BK0727")
+    sector_name: str
+
+
+class TopFundResponse(BaseModel):
+    """Top N 基金排行的单条记录。
+
+    排序键:via_sector 的当日 main_inflow_wan(降序)。
+    score:SignalEngine 持续性 0-9,跟 PR3 holdings-summary 同公式。
+    """
+
+    rank: int = Field(ge=1, description="名次(1-based)")
+    fund_code: str
+    fund_name: str
+    related_sectors: list[str] = Field(
+        description="funds.related_sectors 原始中文标签数组"
+    )
+    matched_sectors: list[MatchedSector] = Field(
+        description="当日有 sector_flow 数据的 mapped BK 板块;可能 1..N 条"
+    )
+    score: int = Field(
+        ge=0, le=9,
+        description="via_sector 的 SignalEngine 持续性总分(基础 0-4 + 连续 0-3 + 量价 0-2)"
+    )
+    main_inflow_wan: Decimal = Field(
+        description="via_sector(matched 中流入最强的)当日主力净流入,万元;"
+                    "可为负(=该 fund 所有 mapped 板块都在退潮,取最不差的)"
+    )
+    change_pct: Decimal | None = Field(
+        default=None,
+        description="via_sector 当日涨跌幅(小数);sector_flow 当字段为 null 时也为 null"
+    )
+    reason: str = Field(description="人类可读的排名解释")
+
+
+class TopFundsResponse(BaseModel):
+    """Top N 基金排行。
+
+    过滤策略:无 related_sectors / 无 mapped BK / mapped BK 无当日数据 → 不上榜。
+    因此 funds 长度 ≤ n,可能更少。空库或全无数据 → {trade_date: null, funds: []}。
+    """
+
+    trade_date: date | None = Field(
+        description="最新有 sector_flow 数据的交易日;空 → null"
+    )
+    funds: list[TopFundResponse] = Field(
+        description="按 via_sector main_inflow 降序排;最多 n 条"
+    )
