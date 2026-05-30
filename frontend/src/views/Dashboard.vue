@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { dashboardApi } from '../api/client'
+import { dashboardApi, type SectorTypeFilter } from '../api/client'
 import AiSummary from '../components/dashboard/AiSummary.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
+import TopFundsCard from '../components/dashboard/TopFunds.vue'
+import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
   HoldingSignal,
@@ -30,6 +32,7 @@ const marketError = ref('')
 const sectorsStatus = ref<Status>('loading')
 const sectorsData = ref<TopSectors | null>(null)
 const sectorsError = ref('')
+const sectorsType = ref<SectorTypeFilter>('industry')
 
 const holdingsStatus = ref<Status>('loading')
 const holdingsData = ref<HoldingsSummary | null>(null)
@@ -47,16 +50,29 @@ function _errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+// sectors 单独抽出来 — 给 tab 切换复用。状态机:点 tab 立刻把 status
+// 切回 'loading',旧 data 保留显示直到新数据到(避免闪烁)。
+function loadSectors(t: SectorTypeFilter): Promise<void> {
+  sectorsStatus.value = 'loading'
+  return dashboardApi.topSectors(20, t).then(
+    (d) => { sectorsData.value = d; sectorsStatus.value = 'ready' },
+    (e) => { sectorsError.value = _errMsg(e); sectorsStatus.value = 'error' },
+  )
+}
+
+function onSectorsTypeChange(t: SectorTypeFilter): void {
+  if (t === sectorsType.value) return
+  sectorsType.value = t
+  void loadSectors(t)
+}
+
 onMounted(() => {
   void Promise.allSettled([
     dashboardApi.market().then(
       (d) => { marketData.value = d; marketStatus.value = 'ready' },
       (e) => { marketError.value = _errMsg(e); marketStatus.value = 'error' },
     ),
-    dashboardApi.topSectors().then(
-      (d) => { sectorsData.value = d; sectorsStatus.value = 'ready' },
-      (e) => { sectorsError.value = _errMsg(e); sectorsStatus.value = 'error' },
-    ),
+    loadSectors(sectorsType.value),
     dashboardApi.holdingsSummary().then(
       (d) => { holdingsData.value = d; holdingsStatus.value = 'ready' },
       (e) => { holdingsError.value = _errMsg(e); holdingsStatus.value = 'error' },
@@ -73,36 +89,9 @@ onMounted(() => {
 })
 
 // ===== 显示辅助 =====
-
-function fmtPct(decStr: string | null | undefined): string {
-  if (decStr === null || decStr === undefined) return 'n/a'
-  const n = Number(decStr) * 100
-  const sign = n > 0 ? '+' : ''   // 负号 Number.toFixed 自带
-  return `${sign}${n.toFixed(2)}%`
-}
-
-function fmtYi(wanStr: string | null | undefined): string {
-  if (wanStr === null || wanStr === undefined) return 'n/a'
-  const yi = Number(wanStr) / 10_000   // 万元 → 亿
-  const sign = yi > 0 ? '+' : ''
-  return `${sign}${yi.toFixed(1)}亿`
-}
-
-function pctColor(decStr: string | null | undefined): string {
-  if (decStr === null || decStr === undefined) return 'text-gray-500'
-  const n = Number(decStr)
-  if (n > 0) return 'text-red-600'   // A 股红涨绿跌惯例
-  if (n < 0) return 'text-green-600'
-  return 'text-gray-700'
-}
-
-function inflowColor(wanStr: string | null | undefined): string {
-  if (wanStr === null || wanStr === undefined) return 'text-gray-500'
-  const n = Number(wanStr)
-  if (n > 0) return 'text-red-600'
-  if (n < 0) return 'text-green-600'
-  return 'text-gray-700'
-}
+// fmtPct / fmtYi / pctColor / inflowColor 已分别迁到使用它们的子组件
+// (MarketTemp / TopSectors / TopFunds);本文件只剩 holdings 卡用到的
+// signalCounts(PR10 会把它也带走)。
 
 function signalCounts(holdings: HoldingSignal[]): Array<[string, number]> {
   const counts: Record<string, number> = {}
@@ -126,90 +115,20 @@ function signalCounts(holdings: HoldingSignal[]): Array<[string, number]> {
     <AiSummary :status="aiStatus" :data="aiData" :error="aiError" />
 
     <!-- 3. Top 20 板块 -->
-    <section class="bg-white rounded-lg shadow-sm p-4 border">
-      <h3 class="text-base font-semibold mb-3 text-gray-900">Top 20 板块</h3>
-      <p v-if="sectorsStatus === 'loading'" class="text-gray-400 text-sm">加载中...</p>
-      <p v-else-if="sectorsStatus === 'error'" class="text-red-500 text-sm">
-        ⚠ {{ sectorsError }}
-      </p>
-      <template v-else-if="sectorsData">
-        <p v-if="sectorsData.sectors.length === 0" class="text-gray-400 text-sm">暂无数据</p>
-        <template v-else>
-          <p class="text-xs text-gray-400 mb-2">
-            截至 {{ sectorsData.trade_date }} · 共 {{ sectorsData.sectors.length }} 条
-          </p>
-          <ul class="text-sm space-y-1">
-            <li
-              v-for="s in sectorsData.sectors.slice(0, 10)"
-              :key="s.sector_code"
-              class="flex items-center justify-between gap-3 py-1 border-b last:border-b-0"
-            >
-              <span class="text-gray-700 truncate">
-                <span class="text-gray-400 text-xs mr-2">#{{ s.rank }}</span>
-                {{ s.sector_name }}
-              </span>
-              <span class="text-right whitespace-nowrap">
-                <span :class="inflowColor(s.main_inflow_wan)">
-                  {{ fmtYi(s.main_inflow_wan) }}
-                </span>
-                <span class="text-xs text-gray-400 ml-2" :class="pctColor(s.change_pct)">
-                  {{ fmtPct(s.change_pct) }}
-                </span>
-              </span>
-            </li>
-          </ul>
-          <p
-            v-if="sectorsData.sectors.length > 10"
-            class="text-xs text-gray-400 mt-2"
-          >
-            显示前 10;PR9 会渲染完整 Top 20
-          </p>
-        </template>
-      </template>
-    </section>
+    <TopSectorsCard
+      :status="sectorsStatus"
+      :data="sectorsData"
+      :error="sectorsError"
+      :current-type="sectorsType"
+      @change-type="onSectorsTypeChange"
+    />
 
     <!-- 4. Top 20 基金 -->
-    <section class="bg-white rounded-lg shadow-sm p-4 border">
-      <h3 class="text-base font-semibold mb-3 text-gray-900">Top 20 基金</h3>
-      <p v-if="fundsStatus === 'loading'" class="text-gray-400 text-sm">加载中...</p>
-      <p v-else-if="fundsStatus === 'error'" class="text-red-500 text-sm">
-        ⚠ {{ fundsError }}
-      </p>
-      <template v-else-if="fundsData">
-        <p v-if="fundsData.funds.length === 0" class="text-gray-400 text-sm">
-          暂无数据(基金需先在 funds 表 + sector_aliases 映射 + sector_flow 当日有数据)
-        </p>
-        <template v-else>
-          <p class="text-xs text-gray-400 mb-2">
-            截至 {{ fundsData.trade_date }} · 共 {{ fundsData.funds.length }} 条
-          </p>
-          <ul class="text-sm space-y-1">
-            <li
-              v-for="f in fundsData.funds.slice(0, 10)"
-              :key="f.fund_code"
-              class="flex items-center justify-between gap-3 py-1 border-b last:border-b-0"
-            >
-              <span class="text-gray-700 truncate min-w-0">
-                <span class="text-gray-400 text-xs mr-2">#{{ f.rank }}</span>
-                {{ f.fund_name }}
-              </span>
-              <span class="text-right whitespace-nowrap">
-                <span :class="inflowColor(f.main_inflow_wan)">
-                  {{ fmtYi(f.main_inflow_wan) }}
-                </span>
-                <span class="text-xs text-gray-400 ml-2">score {{ f.score }}/9</span>
-              </span>
-            </li>
-          </ul>
-          <p
-            v-if="fundsData.funds.length > 10"
-            class="text-xs text-gray-400 mt-2"
-          >
-            显示前 10;PR9 会渲染完整 Top 20
-          </p>
-        </template>
-      </template>
-    </section>
+    <TopFundsCard
+      :status="fundsStatus"
+      :data="fundsData"
+      :error="fundsError"
+    />
 
     <!-- 5. 我的持仓分析 -->
     <section class="bg-white rounded-lg shadow-sm p-4 border">
