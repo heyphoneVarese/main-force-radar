@@ -3,3 +3,9 @@ dist/
 dist-ssr/
 *.local
 .vite/
+
+# TypeScript incremental build cache(vue-tsc -b 跑后生成)
+*.tsbuildinfo
+# vite.config.ts 编译产物(本地构建过会留下)
+vite.config.js
+vite.config.d.ts
