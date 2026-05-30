@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { dashboardApi, type SectorTypeFilter } from '../api/client'
 import AiSummary from '../components/dashboard/AiSummary.vue'
+import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
-import TopFundsCard from '../components/dashboard/TopFunds.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
@@ -46,6 +46,21 @@ const aiStatus = ref<Status>('loading')
 const aiData = ref<AISummary | null>(null)
 const aiError = ref('')
 
+// 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
+// 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
+// HoldingMappings 显示的 rank 仍是全局 across-types 排名,不会因
+// Tab 切换变动。失败也不致命,fallback "—"。
+const allSectorRanks = ref<Map<string, number>>(new Map())
+
+// 持仓 fund_code 集合,客户端过滤 funds/top 用 — 保证 HoldingMappings
+// 只显示用户持仓基金(而非整个 funds 表)。holdingsData 没到前是空 Set,
+// 此时 HoldingMappings 显示空态"holdings 未加载"短暂占位,几百毫秒后
+// holdings 到 → 自动填充。
+const holdingCodes = computed<Set<string>>(() => {
+  if (!holdingsData.value) return new Set()
+  return new Set(holdingsData.value.holdings.map((h) => h.fund_code))
+})
+
 function _errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
@@ -85,6 +100,16 @@ onMounted(() => {
       (d) => { aiData.value = d; aiStatus.value = 'ready' },
       (e) => { aiError.value = _errMsg(e); aiStatus.value = 'error' },
     ),
+    // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
+    // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
+    dashboardApi.topSectors(100, 'all').then(
+      (d) => {
+        const m = new Map<string, number>()
+        for (const s of d.sectors) m.set(s.sector_code, s.rank)
+        allSectorRanks.value = m
+      },
+      () => { /* swallow */ },
+    ),
   ])
 })
 
@@ -109,11 +134,13 @@ onMounted(() => {
       @change-type="onSectorsTypeChange"
     />
 
-    <!-- 4. Top 20 基金 -->
-    <TopFundsCard
+    <!-- 4. 我的持仓映射 -->
+    <HoldingMappings
       :status="fundsStatus"
       :data="fundsData"
       :error="fundsError"
+      :holding-codes="holdingCodes"
+      :sector-rank-by-code="allSectorRanks"
     />
 
     <!-- 5. 我的持仓分析 -->
