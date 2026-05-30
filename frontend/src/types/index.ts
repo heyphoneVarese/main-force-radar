@@ -39,6 +39,17 @@ export interface HoldingUpdate {
   note?: string | null
 }
 
+// 新增基金入参(POST /api/funds)。
+// 后端 FundBase 还有 company / manager / establish_date / tracking_target 等
+// 可选字段;PR13 UI 不暴露,默认 null。fund_type 必填(后端 min_length=1),
+// UI 不让用户填,提交时 hardcode "其他"。
+export interface FundCreate {
+  fund_code: string
+  fund_name: string
+  fund_type: string
+  related_sectors?: string[] | null
+}
+
 // ===== Dashboard responses (镜像 backend Pydantic) =====
 // 所有 Decimal 字段都是 string 透传(跟 Holding.cost_nav 一致语义)。
 // change_pct / main_inflow_pct 是 fraction("0.0066" = 0.66%),前端 ×100 显示。

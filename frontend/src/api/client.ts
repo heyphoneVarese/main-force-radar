@@ -2,6 +2,7 @@
 import type {
   AISummary,
   Fund,
+  FundCreate,
   Holding,
   HoldingCreate,
   HoldingsSummary,
@@ -56,6 +57,11 @@ export const holdingsApi = {
 
 export const fundsApi = {
   list: () => jsonFetch<Fund[]>(`${BASE}/funds`),
+  create: (body: FundCreate) =>
+    jsonFetch<Fund>(`${BASE}/funds`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 }
 
 // ===== Dashboard 5 个端点(Phase 5.1 PR7) =====

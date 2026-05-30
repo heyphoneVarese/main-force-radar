@@ -60,6 +60,104 @@ const fundMap = computed(() => {
   return m
 })
 
+// ==== PR13: 弹窗内嵌"新增基金" ====
+//
+// Element Plus el-select 的 filterable 默认按 label 做模糊匹配。我们用
+// filter-method 重写过滤逻辑(同时按 code 和 name),并把搜索 query 存
+// 到 ref,供 #empty slot 的 "未找到「{query}」" 提示用。
+//
+// 嵌套 dialog 不阻塞外层(append-to-body 默认 true)。提交成功后:
+//   1. funds.value.push(created) — 立刻进入下拉选项
+//   2. formData.fund_code = created.fund_code — 自动选中
+//   3. 关闭嵌套 dialog,用户回到持仓表单继续填
+//
+// fund_type:spec 没列,但后端 schema 必填(min_length=1)。UI 不暴露,
+// 提交时 hardcode "其他"。R6 简化;以后想编辑类型再加 PUT 接口。
+
+const fundSearchQuery = ref('')
+
+function onFundFilter(query: string): void {
+  fundSearchQuery.value = query.trim()
+}
+
+const filteredFunds = computed(() => {
+  const q = fundSearchQuery.value.toLowerCase()
+  if (!q) return funds.value
+  return funds.value.filter(
+    (f) =>
+      f.fund_code.includes(q) ||
+      f.fund_name.toLowerCase().includes(q)
+  )
+})
+
+const createFundDialogVisible = ref(false)
+const newFundFormRef = ref<FormInstance>()
+const newFundForm = reactive({
+  fund_code: '',
+  fund_name: '',
+  related_sectors_input: '',
+})
+
+const newFundRules: FormRules = {
+  fund_code: [
+    { required: true, message: '请输入 6 位基金代码', trigger: 'blur' },
+    { pattern: /^\d{6}$/, message: '必须是 6 位数字', trigger: 'blur' },
+  ],
+  fund_name: [
+    { required: true, message: '请输入基金名称', trigger: 'blur' },
+    { min: 1, max: 100, message: '长度 1-100', trigger: 'blur' },
+  ],
+}
+
+function openCreateFund(): void {
+  // 如果搜索 query 像 6 位代码,prefill
+  const q = fundSearchQuery.value
+  newFundForm.fund_code = /^\d{6}$/.test(q) ? q : ''
+  newFundForm.fund_name = ''
+  newFundForm.related_sectors_input = ''
+  newFundFormRef.value?.clearValidate()
+  createFundDialogVisible.value = true
+}
+
+async function submitNewFund(): Promise<void> {
+  if (!newFundFormRef.value) return
+  try {
+    await newFundFormRef.value.validate()
+  } catch {
+    return
+  }
+
+  // 中英文逗号都接受,去空白,过滤空串
+  const sectors = newFundForm.related_sectors_input
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  try {
+    const created = await fundsApi.create({
+      fund_code: newFundForm.fund_code,
+      fund_name: newFundForm.fund_name,
+      fund_type: '其他',
+      related_sectors: sectors.length > 0 ? sectors : null,
+    })
+    // 立刻加入本地 funds 列表,select 下拉马上能看到
+    funds.value.push(created)
+    // 自动选中
+    formData.fund_code = created.fund_code
+    // 清掉搜索词,关 dialog
+    fundSearchQuery.value = ''
+    createFundDialogVisible.value = false
+    ElMessage.success(`已新增「${created.fund_name}」`)
+  } catch (e) {
+    const msg = (e as Error).message
+    if (msg.includes('409') || msg.includes('already exists')) {
+      ElMessage.warning('基金已存在,请直接选择')
+    } else {
+      ElMessage.error(`新增失败: ${msg}`)
+    }
+  }
+}
+
 async function loadAll() {
   loading.value = true
   try {
@@ -281,16 +379,36 @@ onMounted(loadAll)
           <el-select
             v-model="formData.fund_code"
             filterable
+            :filter-method="onFundFilter"
             :disabled="isEditing"
-            placeholder="搜索代码或名称(filterable)"
+            placeholder="搜索代码或名称"
             class="w-full"
           >
             <el-option
-              v-for="f in funds"
+              v-for="f in filteredFunds"
               :key="f.fund_code"
               :label="`${f.fund_code} · ${f.fund_name}`"
               :value="f.fund_code"
             />
+            <!-- 自定义空态:基金库没收录 → 直接新增 -->
+            <template #empty>
+              <div class="p-3">
+                <p class="text-sm text-gray-600 mb-1">
+                  未找到该基金<span v-if="fundSearchQuery">「<span class="font-mono">{{ fundSearchQuery }}</span>」</span>,是否新增到基金库?
+                </p>
+                <p class="text-xs text-gray-400 mb-2">
+                  基金类型默认"其他";related_sectors 中文标签,以逗号分隔
+                </p>
+                <el-button
+                  size="small"
+                  type="primary"
+                  class="!min-h-[40px]"
+                  @click="openCreateFund"
+                >
+                  + 新增基金
+                </el-button>
+              </div>
+            </template>
           </el-select>
         </el-form-item>
 
@@ -328,6 +446,71 @@ onMounted(loadAll)
       <template #footer>
         <el-button class="!min-h-[44px]" @click="dialogVisible = false">取消</el-button>
         <el-button class="!min-h-[44px]" type="primary" @click="submit">提交</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- PR13:嵌套"新增基金"对话框 -->
+    <el-dialog
+      v-model="createFundDialogVisible"
+      title="新增基金到基金库"
+      :width="isMobile ? '92%' : '460px'"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-form
+        ref="newFundFormRef"
+        :model="newFundForm"
+        :rules="newFundRules"
+        label-position="top"
+      >
+        <el-form-item label="基金代码" prop="fund_code">
+          <el-input
+            v-model="newFundForm.fund_code"
+            placeholder="6 位数字,如 008281"
+            maxlength="6"
+          />
+        </el-form-item>
+
+        <el-form-item label="基金名称" prop="fund_name">
+          <el-input
+            v-model="newFundForm.fund_name"
+            placeholder="如 国泰CES半导体芯片行业ETF联接A"
+            maxlength="100"
+            show-word-limit
+          />
+        </el-form-item>
+
+        <el-form-item label="关联板块(可选)">
+          <el-input
+            v-model="newFundForm.related_sectors_input"
+            placeholder="半导体,芯片,人工智能"
+            maxlength="200"
+            show-word-limit
+          />
+          <p class="text-xs text-gray-400 mt-1">
+            中英文逗号分隔;空着也可以,之后再补
+          </p>
+        </el-form-item>
+
+        <p class="text-xs text-gray-400 -mt-2 mb-2">
+          基金类型默认填"其他";新增成功后会自动选中并回到持仓表单
+        </p>
+      </el-form>
+
+      <template #footer>
+        <el-button
+          class="!min-h-[44px]"
+          @click="createFundDialogVisible = false"
+        >
+          取消
+        </el-button>
+        <el-button
+          class="!min-h-[44px]"
+          type="primary"
+          @click="submitNewFund"
+        >
+          确认新增
+        </el-button>
       </template>
     </el-dialog>
   </div>
