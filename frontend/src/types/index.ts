@@ -146,6 +146,8 @@ export interface SectorPersistenceLeaderItem {
 export interface SectorPersistenceLeadersResponse {
   trade_date: string | null
   sector_type: 'industry' | 'concept' | 'all'
+  // PR24:过滤门槛(continuous_top20_days >= min_days),默认 3
+  min_days: number
   items: SectorPersistenceLeaderItem[]
 }
 

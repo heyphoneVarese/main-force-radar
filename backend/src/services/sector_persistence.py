@@ -244,6 +244,7 @@ def build_persistence_leaders(
     *,
     n: int = 10,
     sector_type: str = "industry",
+    min_days: int = 3,
 ) -> dict[str, Any]:
     """排行榜:对最新日所有(过滤后的)板块算事实,然后按"持续出现"键排序。
 
@@ -259,12 +260,17 @@ def build_persistence_leaders(
       5. sector_code(ASC,兜底)
 
     latest_rank:在 sector_type 过滤后的最新日按 inflow DESC 的位置。
+
+    PR24:加 min_days 过滤,默认 3 — 默认排除"今天刚上榜"的板块,只
+    显示真正"持续出现"的主线。min_days=1 等同 PR22 行为。过滤后不足 n
+    条不补低于 min_days 的板块。
     """
     ctx = _load_context(session)
     if ctx is None:
         return {
             "trade_date": None,
             "sector_type": sector_type,
+            "min_days": min_days,
             "items": [],
         }
 
@@ -289,6 +295,11 @@ def build_persistence_leaders(
         facts["latest_rank"] = facts["rank"]
         all_items.append(facts)
 
+    # PR24:过滤 continuous_top20_days < min_days 的板块
+    filtered = [
+        it for it in all_items if it["continuous_top20_days"] >= min_days
+    ]
+
     # 按 leader keys 排
     def _leader_key(item: dict[str, Any]) -> tuple[int, int, int, int, str]:
         return (
@@ -299,10 +310,11 @@ def build_persistence_leaders(
             item["sector_code"],
         )
 
-    all_items.sort(key=_leader_key)
+    filtered.sort(key=_leader_key)
 
     return {
         "trade_date": ctx["latest_date"],
         "sector_type": sector_type,
-        "items": all_items[:n],
+        "min_days": min_days,
+        "items": filtered[:n],
     }

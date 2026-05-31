@@ -178,8 +178,8 @@ onMounted(() => {
         persistenceStatus.value = 'error'
       },
     ),
-    // PR22:连续Top20排行榜(默认 industry,10 条)
-    dashboardApi.sectorPersistenceLeaders(10, 'industry').then(
+    // PR22 + PR24:连续Top20排行榜(默认 industry,10 条,min_days=3)
+    dashboardApi.sectorPersistenceLeaders(10, 'industry', 3).then(
       (d) => {
         persistenceLeadersData.value = d
         persistenceLeadersStatus.value = 'ready'

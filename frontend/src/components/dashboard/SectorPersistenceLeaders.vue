@@ -100,7 +100,7 @@ function factsLine(item: SectorPersistenceLeaderItem): string {
         </span>
       </div>
       <p class="text-xs text-gray-500 mt-1">
-        识别持续出现的主线,不按今日涨跌排序
+        默认显示连续Top20 ≥{{ data?.min_days ?? 3 }}天的板块
       </p>
     </header>
 
@@ -111,11 +111,11 @@ function factsLine(item: SectorPersistenceLeaderItem): string {
       </p>
       <template v-else-if="data">
         <p v-if="data.items.length === 0" class="text-gray-400 text-sm">
-          暂无收盘数据(等待 cron 15:20 采集完成)
+          暂无连续Top20 ≥{{ data.min_days }}天的板块
         </p>
         <template v-else>
           <p class="text-xs text-gray-400 mb-2 tabular-nums">
-            共 {{ data.items.length }} 条 · 按连续天数排
+            共 {{ data.items.length }} 条 · 过滤 ≥{{ data.min_days }}天 · 按连续天数排
           </p>
           <ul class="divide-y divide-gray-100">
             <li

@@ -336,7 +336,7 @@ class SectorPersistenceLeaderItem(BaseModel):
 
 
 class SectorPersistenceLeadersResponse(BaseModel):
-    """连续Top20排行榜响应(PR22)。
+    """连续Top20排行榜响应(PR22 + PR24)。
 
     items 按以下键 DESC 排序(最后 sector_code ASC 兜底):
       1. continuous_top20_days
@@ -345,15 +345,22 @@ class SectorPersistenceLeadersResponse(BaseModel):
       4. latest_main_inflow_yi
       5. sector_code
 
-    空库 → trade_date=null, items=[]。
+    PR24:新增 min_days 过滤(默认 3),只保留 continuous_top20_days >=
+    min_days 的板块。过滤后不足 n 条不补,显示实际条数。
+
+    空库 → trade_date=null, items=[], min_days 回显请求值。
     """
 
     trade_date: date | None = Field(
         description="最新有 sector_flow_daily 数据的交易日;空 → null"
     )
     sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
+    min_days: int = Field(
+        ge=1, le=60,
+        description="过滤门槛:continuous_top20_days >= min_days(PR24,默认 3)"
+    )
     items: list[SectorPersistenceLeaderItem] = Field(
-        description="按 leader keys 排;最多 n 条(默认 10)"
+        description="按 leader keys 排;最多 n 条(过滤后不足 n 时显示实际条数)"
     )
 
 

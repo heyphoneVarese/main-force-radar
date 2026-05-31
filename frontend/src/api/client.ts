@@ -102,13 +102,15 @@ export const dashboardApi = {
     jsonFetch<SectorPersistenceResponse>(
       `${BASE}/dashboard/sectors/persistence?n=${n}&sector_type=${sectorType}`
     ),
-  // PR22:连续Top20排行榜
+  // PR22 + PR24:连续Top20排行榜(min_days 默认 3,过滤刚上榜板块)
   sectorPersistenceLeaders: (
     n: number = 10,
     sectorType: SectorTypeFilter = 'industry',
+    minDays: number = 3,
   ) =>
     jsonFetch<SectorPersistenceLeadersResponse>(
-      `${BASE}/dashboard/sectors/persistence/leaders?n=${n}&sector_type=${sectorType}`
+      `${BASE}/dashboard/sectors/persistence/leaders` +
+      `?n=${n}&sector_type=${sectorType}&min_days=${minDays}`
     ),
   // PR23:持仓-板块事实预警
   holdingSectorAlerts: (n: number = 10) =>

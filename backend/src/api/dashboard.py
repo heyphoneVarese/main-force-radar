@@ -398,6 +398,11 @@ def get_sector_persistence_leaders(
         "industry",
         description="过滤板块类型;all = industry + concept 混合"
     ),
+    min_days: int = Query(
+        3, ge=1, le=60,
+        description="过滤门槛:只显示 continuous_top20_days >= min_days 的板块"
+                    "(PR24,默认 3;=1 → 等同 PR22)"
+    ),
     db: Session = Depends(get_session),
 ) -> SectorPersistenceLeadersResponse:
     """连续Top20排行榜(按"持续出现"排,不按今日 inflow)。
@@ -412,12 +417,19 @@ def get_sector_persistence_leaders(
               last_20_inflow_days, today's inflow, sector_code) 排
     都基于同一 sector_flow_daily,不读 intraday。
 
-    空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
+    PR24:min_days 默认 3 — 默认排除"今天刚上榜"的噪声;过滤后不足 n
+    条只返回实际条数,**不补**低于 min_days 的板块。
+
+    空库 → {"trade_date": null, "sector_type": <param>,
+            "min_days": <param>, "items": []} + 200
     """
-    raw = build_persistence_leaders(db, n=n, sector_type=sector_type)
+    raw = build_persistence_leaders(
+        db, n=n, sector_type=sector_type, min_days=min_days
+    )
     return SectorPersistenceLeadersResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
+        min_days=raw["min_days"],
         items=[_to_leader_item(it) for it in raw["items"]],
     )
 

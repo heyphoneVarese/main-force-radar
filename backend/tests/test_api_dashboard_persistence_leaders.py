@@ -86,7 +86,10 @@ def seed_three_continuous_patterns(db_session):
 def test_leaders_sort_by_continuous_top20_days_desc(
     client, seed_three_continuous_patterns
 ):
-    body = client.get("/api/dashboard/sectors/persistence/leaders").json()
+    # PR24:fixture 含 continuous_top20=1 的 BK_SHORT → 需 min_days=1 看全
+    body = client.get(
+        "/api/dashboard/sectors/persistence/leaders?min_days=1"
+    ).json()
     codes = [it["sector_code"] for it in body["items"]]
     # LONG=30 > MID=10 > SHORT=1
     assert codes == ["BK_LONG", "BK_MID", "BK_SHORT"]
@@ -192,7 +195,7 @@ def test_leaders_sector_type_industry_only(db_session, client):
     db_session.commit()
 
     body = client.get(
-        "/api/dashboard/sectors/persistence/leaders?sector_type=industry"
+        "/api/dashboard/sectors/persistence/leaders?sector_type=industry&min_days=1"
     ).json()
     codes = [it["sector_code"] for it in body["items"]]
     assert codes == ["BK_IND"]
@@ -207,7 +210,7 @@ def test_leaders_sector_type_concept_only(db_session, client):
     db_session.commit()
 
     body = client.get(
-        "/api/dashboard/sectors/persistence/leaders?sector_type=concept"
+        "/api/dashboard/sectors/persistence/leaders?sector_type=concept&min_days=1"
     ).json()
     codes = [it["sector_code"] for it in body["items"]]
     assert codes == ["BK_CON"]
@@ -222,7 +225,7 @@ def test_leaders_sector_type_all_mixes(db_session, client):
     db_session.commit()
 
     body = client.get(
-        "/api/dashboard/sectors/persistence/leaders?sector_type=all"
+        "/api/dashboard/sectors/persistence/leaders?sector_type=all&min_days=1"
     ).json()
     assert len(body["items"]) == 2
 
@@ -302,7 +305,9 @@ def test_leaders_latest_rank_reflects_inflow_position(db_session, client):
     ])
     db_session.commit()
 
-    body = client.get("/api/dashboard/sectors/persistence/leaders").json()
+    body = client.get(
+        "/api/dashboard/sectors/persistence/leaders?min_days=1"
+    ).json()
     rank_by_code = {it["sector_code"]: it["latest_rank"] for it in body["items"]}
     # 排序 leader keys 全相同 → 用 latest main_inflow tiebreak
     # 但 latest_rank 始终反映在最新日按 inflow DESC 的位置
@@ -321,7 +326,9 @@ def test_leaders_latest_main_inflow_yi_decoded(db_session, client):
     db_session.add(_mk_flow("BK_X", "X", d, Y(95)))  # 95 亿
     db_session.commit()
 
-    body = client.get("/api/dashboard/sectors/persistence/leaders").json()
+    body = client.get(
+        "/api/dashboard/sectors/persistence/leaders?min_days=1"
+    ).json()
     item = body["items"][0]
     assert Decimal(item["latest_main_inflow_yi"]) == Decimal("95")
 
@@ -345,7 +352,11 @@ def test_leaders_long_continuous_beats_high_today_inflow(db_session, client):
     db_session.add_all(rows)
     db_session.commit()
 
-    body = client.get("/api/dashboard/sectors/persistence/leaders").json()
+    # PR24:BK_B continuous_top20=1 → 需 min_days=1 才能看到它,从而验证
+    # "A 排在 B 前"这个 leader 排序行为
+    body = client.get(
+        "/api/dashboard/sectors/persistence/leaders?min_days=1"
+    ).json()
     codes = [it["sector_code"] for it in body["items"]]
     assert codes == ["BK_A", "BK_B"]
     # 验证一下:A 不是今天 top1(B 才是),但 leader 第一仍是 A
@@ -393,6 +404,6 @@ def test_leaders_n_param_limits_count(db_session, client):
     db_session.commit()
 
     body = client.get(
-        "/api/dashboard/sectors/persistence/leaders?n=2"
+        "/api/dashboard/sectors/persistence/leaders?n=2&min_days=1"
     ).json()
     assert len(body["items"]) == 2
