@@ -7,6 +7,7 @@ import MainRadar from '../components/dashboard/MainRadar.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
+import SectorPersistence from '../components/dashboard/SectorPersistence.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
@@ -14,6 +15,7 @@ import type {
   HoldingsSummary,
   IntradayTopSectors,
   MarketSnapshot,
+  SectorPersistenceResponse,
   TopFunds,
   TopSectors,
 } from '../types'
@@ -61,6 +63,11 @@ const aiError = ref('')
 const radarStatus = ref<Status>('loading')
 const radarData = ref<DashboardRadarResponse | null>(null)
 const radarError = ref('')
+
+// PR20:主线连续性(收盘事实)
+const persistenceStatus = ref<Status>('loading')
+const persistenceData = ref<SectorPersistenceResponse | null>(null)
+const persistenceError = ref('')
 
 // 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
 // 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
@@ -149,6 +156,14 @@ onMounted(() => {
       (d) => { radarData.value = d; radarStatus.value = 'ready' },
       (e) => { radarError.value = _errMsg(e); radarStatus.value = 'error' },
     ),
+    // PR20:主线连续性事实
+    dashboardApi.sectorPersistence(20, 'industry').then(
+      (d) => { persistenceData.value = d; persistenceStatus.value = 'ready' },
+      (e) => {
+        persistenceError.value = _errMsg(e)
+        persistenceStatus.value = 'error'
+      },
+    ),
     // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
     // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
     dashboardApi.topSectors(100, 'all').then(
@@ -188,7 +203,14 @@ onMounted(() => {
       @change-mode="onSectorsModeChange"
     />
 
-    <!-- 4. 主力雷达(PR16 — intraday 板块 → 基金映射)-->
+    <!-- 4. 主线连续性 · 收盘事实(PR20)-->
+    <SectorPersistence
+      :status="persistenceStatus"
+      :data="persistenceData"
+      :error="persistenceError"
+    />
+
+    <!-- 5. 主力雷达(PR16 — intraday 板块 → 基金映射)-->
     <MainRadar
       :status="radarStatus"
       :data="radarData"

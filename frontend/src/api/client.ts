@@ -10,6 +10,7 @@ import type {
   HoldingUpdate,
   IntradayTopSectors,
   MarketSnapshot,
+  SectorPersistenceResponse,
   TopFunds,
   TopSectors,
 } from '../types'
@@ -91,5 +92,12 @@ export const dashboardApi = {
   radar: (mode: 'intraday' = 'intraday', n: number = 20) =>
     jsonFetch<DashboardRadarResponse>(
       `${BASE}/dashboard/radar?mode=${mode}&n=${n}`
+    ),
+  sectorPersistence: (
+    n: number = 20,
+    sectorType: SectorTypeFilter = 'industry',
+  ) =>
+    jsonFetch<SectorPersistenceResponse>(
+      `${BASE}/dashboard/sectors/persistence?n=${n}&sector_type=${sectorType}`
     ),
 }

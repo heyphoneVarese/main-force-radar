@@ -207,6 +207,61 @@ class IntradayTopSectorsResponse(BaseModel):
     )
 
 
+class SectorPersistenceItem(BaseModel):
+    """板块连续天数事实(PR20)。
+
+    R3 红线:**全部是客观事实计数**,不是 score / health 评分 / 投资建议。
+    字段命名一律 _days / _count,提醒消费方不要再合成派生分。
+    """
+
+    rank: int = Field(ge=1, description="最新日按 main_inflow 降序的排名(1-based)")
+    sector_code: str
+    sector_name: str
+    sector_type: str = Field(description="industry / concept / region")
+    main_inflow_yi: Decimal = Field(description="最新日主力净流入,亿元")
+
+    continuous_inflow_days: int = Field(
+        ge=0,
+        description="从最新日起连续 main_inflow > 0 的天数;遇 <=0 或缺记录则停"
+    )
+    continuous_outflow_days: int = Field(
+        ge=0,
+        description="从最新日起连续 main_inflow < 0 的天数;遇 >=0 或缺记录则停"
+    )
+    continuous_top20_days: int = Field(
+        ge=0,
+        description="从最新日起连续在同 sector_type Top20 里的天数;遇缺席则停"
+    )
+    last_20_top20_days: int = Field(
+        ge=0, le=20,
+        description="最近 20 个交易日内进入 Top20 的次数"
+    )
+    last_20_inflow_days: int = Field(
+        ge=0, le=20,
+        description="最近 20 个交易日内 main_inflow > 0 的天数"
+    )
+    last_20_outflow_days: int = Field(
+        ge=0, le=20,
+        description="最近 20 个交易日内 main_inflow < 0 的天数"
+    )
+
+
+class SectorPersistenceResponse(BaseModel):
+    """板块连续天数响应(PR20)。
+
+    空库 → trade_date=null, items=[]。items 按最新日 main_inflow 降序,
+    不按连续天数排(连续天数只是附加事实,UI 自己决定怎么用)。
+    """
+
+    trade_date: date | None = Field(
+        description="最新有 sector_flow_daily 数据的交易日;空 → null"
+    )
+    sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
+    items: list[SectorPersistenceItem] = Field(
+        description="最新日 main_inflow Top n;每条带 6 个事实字段"
+    )
+
+
 class RadarFundItem(BaseModel):
     """主力雷达单条基金项(PR16)。
 

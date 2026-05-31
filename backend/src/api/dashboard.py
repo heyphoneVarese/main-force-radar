@@ -35,6 +35,8 @@ from src.schemas.dashboard import (
     RadarFundItem,
     SectorBriefItem,
     SectorFlowResponse,
+    SectorPersistenceItem,
+    SectorPersistenceResponse,
     TopFundResponse,
     TopFundsResponse,
     TopSectorsResponse,
@@ -44,6 +46,7 @@ from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
 from src.services.radar import build_intraday_radar
+from src.services.sector_persistence import build_sector_persistence
 from src.utils.date_helper import cn_now
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 
@@ -286,6 +289,59 @@ def _to_intraday_sector_response(
             if row.change_pct_x10000 is not None
             else None
         ),
+    )
+
+
+# =====================================================================
+# 板块连续天数事实(PR20 — 基于 sector_flow_daily)
+# =====================================================================
+
+
+def _to_persistence_item(d: dict) -> SectorPersistenceItem:
+    """service 出的 dict → Pydantic。main_inflow_yi 在这里算成亿元(已 /1e8)。"""
+    wan_x10000 = d["main_inflow_wan_x10000"]
+    yi = Decimal(wan_x10000) / Decimal(100_000_000)
+    return SectorPersistenceItem(
+        rank=d["rank"],
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        sector_type=d["sector_type"],
+        main_inflow_yi=yi,
+        continuous_inflow_days=d["continuous_inflow_days"],
+        continuous_outflow_days=d["continuous_outflow_days"],
+        continuous_top20_days=d["continuous_top20_days"],
+        last_20_top20_days=d["last_20_top20_days"],
+        last_20_inflow_days=d["last_20_inflow_days"],
+        last_20_outflow_days=d["last_20_outflow_days"],
+    )
+
+
+@router.get(
+    "/sectors/persistence", response_model=SectorPersistenceResponse
+)
+def get_sector_persistence(
+    n: int = Query(20, ge=1, le=100, description="Top N(1..100,默认 20)"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry",
+        description="过滤板块类型;all = 不过滤"
+    ),
+    db: Session = Depends(get_session),
+) -> SectorPersistenceResponse:
+    """板块连续天数事实(最新日 Top N + 历史连续天数)。
+
+    R3 红线:全部字段都是**客观事实计数**,不是评分 / 健康分 / 投资建议。
+    items 按最新日 main_inflow 降序排,不按连续天数 — 连续天数是附加事实。
+
+    数据源固定 sector_flow_daily(收盘累计),**不读** intraday_sector_flow
+    (盘中噪音不进入历史连续性判断)。
+
+    空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
+    """
+    raw = build_sector_persistence(db, n=n, sector_type=sector_type)
+    return SectorPersistenceResponse(
+        trade_date=raw["trade_date"],
+        sector_type=raw["sector_type"],
+        items=[_to_persistence_item(it) for it in raw["items"]],
     )
 
 
