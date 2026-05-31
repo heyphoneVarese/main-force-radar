@@ -116,6 +116,39 @@ export interface SectorPersistenceResponse {
   items: SectorPersistenceItem[]
 }
 
+// PR22:连续Top20排行榜单条(spec)
+// R3 红线:仍是客观计数事实,不是评分 / 健康度 / 买卖建议。
+// 跟 SectorPersistenceItem 区别:
+//   - 用 latest_rank(强调"当日排名只是参考,排序按 leader keys 走")
+//   - 用 latest_main_inflow_yi(Decimal 亿元字符串)
+//   - 不含 outflow 窗口(spec:排行榜聚焦"在场",outflow 不进 leader 信号)
+export interface SectorPersistenceLeaderItem {
+  sector_code: string
+  sector_name: string
+  sector_type: string
+
+  latest_rank: number                     // 在 sector_type 过滤后的最新日 inflow DESC 排名
+  latest_main_inflow_yi: string           // Decimal 亿元
+
+  continuous_top20_days: number
+  continuous_inflow_days: number
+  continuous_outflow_days: number
+
+  last_5_inflow_days: number
+  last_10_inflow_days: number
+  last_20_inflow_days: number
+
+  last_5_top20_days: number
+  last_10_top20_days: number
+  last_20_top20_days: number
+}
+
+export interface SectorPersistenceLeadersResponse {
+  trade_date: string | null
+  sector_type: 'industry' | 'concept' | 'all'
+  items: SectorPersistenceLeaderItem[]
+}
+
 export interface IntradayTopSectors {
   trade_date: string | null
   snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻

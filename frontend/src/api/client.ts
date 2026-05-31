@@ -10,6 +10,7 @@ import type {
   HoldingUpdate,
   IntradayTopSectors,
   MarketSnapshot,
+  SectorPersistenceLeadersResponse,
   SectorPersistenceResponse,
   TopFunds,
   TopSectors,
@@ -99,5 +100,13 @@ export const dashboardApi = {
   ) =>
     jsonFetch<SectorPersistenceResponse>(
       `${BASE}/dashboard/sectors/persistence?n=${n}&sector_type=${sectorType}`
+    ),
+  // PR22:连续Top20排行榜
+  sectorPersistenceLeaders: (
+    n: number = 10,
+    sectorType: SectorTypeFilter = 'industry',
+  ) =>
+    jsonFetch<SectorPersistenceLeadersResponse>(
+      `${BASE}/dashboard/sectors/persistence/leaders?n=${n}&sector_type=${sectorType}`
     ),
 }

@@ -8,6 +8,7 @@ import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
 import SectorPersistence from '../components/dashboard/SectorPersistence.vue'
+import SectorPersistenceLeaders from '../components/dashboard/SectorPersistenceLeaders.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
@@ -15,6 +16,7 @@ import type {
   HoldingsSummary,
   IntradayTopSectors,
   MarketSnapshot,
+  SectorPersistenceLeadersResponse,
   SectorPersistenceResponse,
   TopFunds,
   TopSectors,
@@ -68,6 +70,11 @@ const radarError = ref('')
 const persistenceStatus = ref<Status>('loading')
 const persistenceData = ref<SectorPersistenceResponse | null>(null)
 const persistenceError = ref('')
+
+// PR22:连续Top20排行榜(收盘事实排行,不按今日 inflow 排)
+const persistenceLeadersStatus = ref<Status>('loading')
+const persistenceLeadersData = ref<SectorPersistenceLeadersResponse | null>(null)
+const persistenceLeadersError = ref('')
 
 // 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
 // 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
@@ -164,6 +171,17 @@ onMounted(() => {
         persistenceStatus.value = 'error'
       },
     ),
+    // PR22:连续Top20排行榜(默认 industry,10 条)
+    dashboardApi.sectorPersistenceLeaders(10, 'industry').then(
+      (d) => {
+        persistenceLeadersData.value = d
+        persistenceLeadersStatus.value = 'ready'
+      },
+      (e) => {
+        persistenceLeadersError.value = _errMsg(e)
+        persistenceLeadersStatus.value = 'error'
+      },
+    ),
     // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
     // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
     dashboardApi.topSectors(100, 'all').then(
@@ -208,6 +226,13 @@ onMounted(() => {
       :status="persistenceStatus"
       :data="persistenceData"
       :error="persistenceError"
+    />
+
+    <!-- 4b. 连续Top20排行榜(PR22 — 按持续天数排,不按今日 inflow)-->
+    <SectorPersistenceLeaders
+      :status="persistenceLeadersStatus"
+      :data="persistenceLeadersData"
+      :error="persistenceLeadersError"
     />
 
     <!-- 5. 主力雷达(PR16 — intraday 板块 → 基金映射)-->

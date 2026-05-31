@@ -36,6 +36,8 @@ from src.schemas.dashboard import (
     SectorBriefItem,
     SectorFlowResponse,
     SectorPersistenceItem,
+    SectorPersistenceLeaderItem,
+    SectorPersistenceLeadersResponse,
     SectorPersistenceResponse,
     TopFundResponse,
     TopFundsResponse,
@@ -46,7 +48,10 @@ from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
 from src.services.radar import build_intraday_radar
-from src.services.sector_persistence import build_sector_persistence
+from src.services.sector_persistence import (
+    build_persistence_leaders,
+    build_sector_persistence,
+)
 from src.utils.date_helper import cn_now
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 
@@ -350,6 +355,67 @@ def get_sector_persistence(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_persistence_item(it) for it in raw["items"]],
+    )
+
+
+# =====================================================================
+# 连续 Top20 排行榜(PR22)
+# =====================================================================
+
+
+def _to_leader_item(d: dict) -> SectorPersistenceLeaderItem:
+    """service 出 dict → Pydantic;rank 映射成 latest_rank;算 yi。"""
+    wan_x10000 = d["main_inflow_wan_x10000"]
+    yi = Decimal(wan_x10000) / Decimal(100_000_000)
+    return SectorPersistenceLeaderItem(
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        sector_type=d["sector_type"],
+        latest_rank=d["latest_rank"],
+        latest_main_inflow_yi=yi,
+        continuous_top20_days=d["continuous_top20_days"],
+        continuous_inflow_days=d["continuous_inflow_days"],
+        continuous_outflow_days=d["continuous_outflow_days"],
+        last_5_inflow_days=d["last_5_inflow_days"],
+        last_10_inflow_days=d["last_10_inflow_days"],
+        last_20_inflow_days=d["last_20_inflow_days"],
+        last_5_top20_days=d["last_5_top20_days"],
+        last_10_top20_days=d["last_10_top20_days"],
+        last_20_top20_days=d["last_20_top20_days"],
+    )
+
+
+@router.get(
+    "/sectors/persistence/leaders",
+    response_model=SectorPersistenceLeadersResponse,
+)
+def get_sector_persistence_leaders(
+    n: int = Query(10, ge=1, le=100, description="Top N(1..100,默认 10)"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry",
+        description="过滤板块类型;all = industry + concept 混合"
+    ),
+    db: Session = Depends(get_session),
+) -> SectorPersistenceLeadersResponse:
+    """连续Top20排行榜(按"持续出现"排,不按今日 inflow)。
+
+    R3 红线:本榜单**不是评分 / 不是健康度 / 不是买卖建议**。排序键全部
+    是客观计数(continuous_top20_days 等)。允许某板块最新日 inflow 不大
+    但因为连续 Top20 天数高排在前。
+
+    跟 /sectors/persistence(PR20/21)的区别:
+    - 该端点按 today's main_inflow DESC 排
+    - 本端点按 (continuous_top20_days, last_20_top20_days,
+              last_20_inflow_days, today's inflow, sector_code) 排
+    都基于同一 sector_flow_daily,不读 intraday。
+
+    空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
+    """
+    raw = build_persistence_leaders(db, n=n, sector_type=sector_type)
+    return SectorPersistenceLeadersResponse(
+        trade_date=raw["trade_date"],
+        sector_type=raw["sector_type"],
+        items=[_to_leader_item(it) for it in raw["items"]],
     )
 
 

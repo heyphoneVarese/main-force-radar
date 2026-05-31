@@ -290,6 +290,73 @@ class SectorPersistenceResponse(BaseModel):
     )
 
 
+class SectorPersistenceLeaderItem(BaseModel):
+    """连续Top20排行榜单条(PR22)。
+
+    跟 SectorPersistenceItem 区别:
+    - 加 latest_rank(板块在最新日按 inflow DESC 的位置)+ latest_main_inflow_yi
+    - 不含 outflow 窗口计数(spec:排行榜聚焦"在场",outflow 不进 leader 信号)
+    - rank 命名为 latest_rank,提醒消费方"这只是当日排名,leader 排序看 sort key"
+
+    R3 红线:本字段集仍是**客观事实计数**,不是评分 / 健康度 / 买卖建议。
+    """
+
+    sector_code: str
+    sector_name: str
+    sector_type: str
+
+    latest_rank: int = Field(
+        ge=1,
+        description="在最新日(按 main_inflow DESC)的位置;1-based"
+    )
+    latest_main_inflow_yi: Decimal = Field(
+        description="最新日主力净流入,亿元"
+    )
+
+    continuous_top20_days: int = Field(
+        ge=0,
+        description="从最新日起连续在同 sector_type Top20 里的天数"
+    )
+    continuous_inflow_days: int = Field(
+        ge=0,
+        description="从最新日起连续 main_inflow > 0 的天数"
+    )
+    continuous_outflow_days: int = Field(
+        ge=0,
+        description="从最新日起连续 main_inflow < 0 的天数"
+    )
+
+    last_5_inflow_days: int = Field(ge=0, le=5)
+    last_10_inflow_days: int = Field(ge=0, le=10)
+    last_20_inflow_days: int = Field(ge=0, le=20)
+
+    last_5_top20_days: int = Field(ge=0, le=5)
+    last_10_top20_days: int = Field(ge=0, le=10)
+    last_20_top20_days: int = Field(ge=0, le=20)
+
+
+class SectorPersistenceLeadersResponse(BaseModel):
+    """连续Top20排行榜响应(PR22)。
+
+    items 按以下键 DESC 排序(最后 sector_code ASC 兜底):
+      1. continuous_top20_days
+      2. last_20_top20_days
+      3. last_20_inflow_days
+      4. latest_main_inflow_yi
+      5. sector_code
+
+    空库 → trade_date=null, items=[]。
+    """
+
+    trade_date: date | None = Field(
+        description="最新有 sector_flow_daily 数据的交易日;空 → null"
+    )
+    sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
+    items: list[SectorPersistenceLeaderItem] = Field(
+        description="按 leader keys 排;最多 n 条(默认 10)"
+    )
+
+
 class RadarFundItem(BaseModel):
     """主力雷达单条基金项(PR16)。
 

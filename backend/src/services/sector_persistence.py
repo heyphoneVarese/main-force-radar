@@ -95,119 +95,214 @@ def _continuous_count(
     return streak
 
 
-def build_sector_persistence(
-    session: Session,
-    *,
-    n: int = 20,
-    sector_type: str = "industry",
-) -> dict[str, Any]:
-    """spec 主入口。返回 dict(_x10000 整数原样,API 层负责 Decimal 转换)。
+def _load_context(session: Session) -> dict[str, Any] | None:
+    """共享:一次性拉所有 sector_flow_daily 行并预聚合 lookups。
 
-    sector_type:'industry' / 'concept' / 'all'
-    - 'industry'/'concept' 时,最新日 top-N 在该类型内排名;continuous_top20
-      也在该类型内
-    - 'all' 时,最新日 top-N 跨 industry+concept 合并排名;continuous_top20
-      仍按"自己 sector_type 内的 top20"(industry 看 industry top20,
-      concept 看 concept top20)
+    PR22 提取出来给 build_sector_persistence + build_persistence_leaders 复用。
+
+    Returns: dict 或 None(空库)。
+      latest_date    : date
+      all_rows       : list[SectorFlowDaily]
+      all_dates      : list[date] desc
+      topk_lookup    : dict[(sector_type, date)] → set[sector_code]
+      history_by_code: dict[sector_code] → dict[date] → SectorFlowDaily
+      windowed_dates : dict[int] → list[date](_LAST_N_WINDOWS 各切片)
     """
-    # 1. 最新交易日
     latest_date = session.scalar(
         select(SectorFlowDaily.trade_date)
         .order_by(SectorFlowDaily.trade_date.desc())
         .limit(1)
     )
     if latest_date is None:
+        return None
+
+    all_rows = list(session.scalars(select(SectorFlowDaily)))
+    all_dates: list[date] = sorted(
+        {r.trade_date for r in all_rows}, reverse=True
+    )
+    topk_lookup = _build_topk_lookup(all_rows)
+    history_by_code: dict[str, dict[date, SectorFlowDaily]] = {}
+    for r in all_rows:
+        history_by_code.setdefault(r.sector_code, {})[r.trade_date] = r
+    windowed_dates: dict[int, list[date]] = {
+        k: all_dates[:k] for k in _LAST_N_WINDOWS
+    }
+    return {
+        "latest_date": latest_date,
+        "all_rows": all_rows,
+        "all_dates": all_dates,
+        "topk_lookup": topk_lookup,
+        "history_by_code": history_by_code,
+        "windowed_dates": windowed_dates,
+    }
+
+
+def _compute_facts(
+    ctx: dict[str, Any], row: SectorFlowDaily, rank: int
+) -> dict[str, Any]:
+    """共享:对一个 sector(在 latest_date 那条 row)算全部 12 个事实字段。
+
+    rank:该 sector 在最新日按 main_inflow DESC 的排名(1-based)。
+    """
+    code = row.sector_code
+    own_type = row.sector_type
+    sector_hist = ctx["history_by_code"].get(code, {})
+    all_dates = ctx["all_dates"]
+    topk_lookup = ctx["topk_lookup"]
+
+    c_in = _continuous_count(
+        code, own_type, all_dates, sector_hist, condition="inflow"
+    )
+    c_out = _continuous_count(
+        code, own_type, all_dates, sector_hist, condition="outflow"
+    )
+    c_top = _continuous_count(
+        code, own_type, all_dates, sector_hist,
+        condition="top20", topk_lookup=topk_lookup,
+    )
+
+    window_counts: dict[str, int] = {}
+    for k in _LAST_N_WINDOWS:
+        k_dates = ctx["windowed_dates"][k]
+        k_top = 0
+        k_in = 0
+        k_out = 0
+        for d in k_dates:
+            if code in topk_lookup.get((own_type, d), set()):
+                k_top += 1
+            r = sector_hist.get(d)
+            if r is None:
+                continue
+            if r.main_inflow_wan_x10000 > 0:
+                k_in += 1
+            elif r.main_inflow_wan_x10000 < 0:
+                k_out += 1
+        window_counts[f"last_{k}_top20_days"] = k_top
+        window_counts[f"last_{k}_inflow_days"] = k_in
+        window_counts[f"last_{k}_outflow_days"] = k_out
+
+    return {
+        "sector_code": code,
+        "sector_name": row.sector_name,
+        "sector_type": own_type,
+        "main_inflow_wan_x10000": row.main_inflow_wan_x10000,
+        "rank": rank,
+        "continuous_inflow_days": c_in,
+        "continuous_outflow_days": c_out,
+        "continuous_top20_days": c_top,
+        **window_counts,
+    }
+
+
+def build_sector_persistence(
+    session: Session,
+    *,
+    n: int = 20,
+    sector_type: str = "industry",
+) -> dict[str, Any]:
+    """主入口(PR20/21 不变)。返回 dict(_x10000 整数原样,API 层转 Decimal)。
+
+    sector_type:'industry' / 'concept' / 'all'
+    - 'industry'/'concept':最新日 top-N 在该类型内排;continuous_top20 同
+    - 'all':最新日 top-N 跨 industry+concept 合并排;continuous_top20 仍
+      按板块"自己 sector_type 内的 top20"(industry 看 industry top20,
+      concept 看 concept top20)
+    """
+    ctx = _load_context(session)
+    if ctx is None:
         return {
             "trade_date": None,
             "sector_type": sector_type,
             "items": [],
         }
 
-    # 2. 一次性拉所有历史(R6:内存 grouping 比 N+1 查询省事)
-    all_rows = list(session.scalars(select(SectorFlowDaily)))
-
-    # 全部 distinct trade_date,倒序
-    all_dates: list[date] = sorted(
-        {r.trade_date for r in all_rows}, reverse=True
-    )
-
-    # Top-K 查询表(用于 continuous_top20 + last_20_top20)
-    topk_lookup = _build_topk_lookup(all_rows)
-
-    # 按 (sector_code) 收集历史,方便 inflow/outflow 判断
-    history_by_code: dict[str, dict[date, SectorFlowDaily]] = {}
-    for r in all_rows:
-        history_by_code.setdefault(r.sector_code, {})[r.trade_date] = r
-
-    # 3. 最新日按 sector_type 过滤 + 按 inflow DESC 取 top n
-    latest_rows = [r for r in all_rows if r.trade_date == latest_date]
+    # 最新日按 sector_type 过滤 + 按 inflow DESC 取 top n
+    latest_rows = [
+        r for r in ctx["all_rows"] if r.trade_date == ctx["latest_date"]
+    ]
     if sector_type != "all":
         latest_rows = [r for r in latest_rows if r.sector_type == sector_type]
     latest_rows.sort(key=lambda r: -r.main_inflow_wan_x10000)
     top_rows = latest_rows[:n]
 
-    # 4. 对每个上榜板块算事实字段
-    # PR21:预切多窗口子表;all_dates[:k] 在历史不足 k 天时自然返更短切片,
-    # 计数器只数实际存在的日 → 不需要 cap 逻辑。
-    windowed_dates: dict[int, list[date]] = {
-        k: all_dates[:k] for k in _LAST_N_WINDOWS
-    }
-
-    items: list[dict[str, Any]] = []
-    for i, top in enumerate(top_rows, start=1):
-        code = top.sector_code
-        own_type = top.sector_type
-        sector_hist = history_by_code.get(code, {})
-
-        # 连续天数(从最新日往前)
-        c_in = _continuous_count(
-            code, own_type, all_dates, sector_hist, condition="inflow"
-        )
-        c_out = _continuous_count(
-            code, own_type, all_dates, sector_hist, condition="outflow"
-        )
-        c_top = _continuous_count(
-            code, own_type, all_dates, sector_hist,
-            condition="top20", topk_lookup=topk_lookup,
-        )
-
-        # PR21:多窗口 last_N 计数(交易日)
-        # 一次性算 3 个窗口的 3 种 metric,共 9 个计数
-        window_counts: dict[str, int] = {}
-        for k in _LAST_N_WINDOWS:
-            k_dates = windowed_dates[k]
-            k_top = 0
-            k_in = 0
-            k_out = 0
-            for d in k_dates:
-                if code in topk_lookup.get((own_type, d), set()):
-                    k_top += 1
-                r = sector_hist.get(d)
-                if r is None:
-                    continue  # spec:缺记录不加
-                if r.main_inflow_wan_x10000 > 0:
-                    k_in += 1
-                elif r.main_inflow_wan_x10000 < 0:
-                    k_out += 1
-                # == 0 不计入两类
-            window_counts[f"last_{k}_top20_days"] = k_top
-            window_counts[f"last_{k}_inflow_days"] = k_in
-            window_counts[f"last_{k}_outflow_days"] = k_out
-
-        items.append({
-            "sector_code": code,
-            "sector_name": top.sector_name,
-            "sector_type": own_type,
-            "main_inflow_wan_x10000": top.main_inflow_wan_x10000,
-            "rank": i,
-            "continuous_inflow_days": c_in,
-            "continuous_outflow_days": c_out,
-            "continuous_top20_days": c_top,
-            **window_counts,
-        })
+    items = [_compute_facts(ctx, r, i + 1) for i, r in enumerate(top_rows)]
 
     return {
-        "trade_date": latest_date,
+        "trade_date": ctx["latest_date"],
         "sector_type": sector_type,
         "items": items,
+    }
+
+
+# =====================================================================
+# PR22 — 连续 Top20 排行榜
+# =====================================================================
+
+
+def build_persistence_leaders(
+    session: Session,
+    *,
+    n: int = 10,
+    sector_type: str = "industry",
+) -> dict[str, Any]:
+    """排行榜:对最新日所有(过滤后的)板块算事实,然后按"持续出现"键排序。
+
+    R3 红线:**不做评分 / 健康度 / 买卖建议**。这里只是用客观计数键做
+    排序顺序的调整 — continuous_top20_days 排第一是因为它最能反映"持续
+    出现"这个事实,不是"看多/看空"。
+
+    排序键(全部 DESC,最后 sector_code ASC 兜底稳定):
+      1. continuous_top20_days
+      2. last_20_top20_days
+      3. last_20_inflow_days
+      4. main_inflow_wan_x10000(latest 当日)
+      5. sector_code(ASC,兜底)
+
+    latest_rank:在 sector_type 过滤后的最新日按 inflow DESC 的位置。
+    """
+    ctx = _load_context(session)
+    if ctx is None:
+        return {
+            "trade_date": None,
+            "sector_type": sector_type,
+            "items": [],
+        }
+
+    # 最新日按 sector_type 过滤
+    latest_rows = [
+        r for r in ctx["all_rows"] if r.trade_date == ctx["latest_date"]
+    ]
+    if sector_type != "all":
+        latest_rows = [r for r in latest_rows if r.sector_type == sector_type]
+
+    # 先按 inflow 排,标 latest_rank(1-based)— 给客户端"今天主力净流入排第几"
+    by_inflow_desc = sorted(
+        latest_rows, key=lambda r: -r.main_inflow_wan_x10000
+    )
+    rank_by_code = {r.sector_code: i + 1 for i, r in enumerate(by_inflow_desc)}
+
+    # 对每个板块算完整事实,带上 latest_rank
+    all_items: list[dict[str, Any]] = []
+    for r in latest_rows:
+        facts = _compute_facts(ctx, r, rank_by_code[r.sector_code])
+        # 复制 rank → latest_rank,api 层用这个名字
+        facts["latest_rank"] = facts["rank"]
+        all_items.append(facts)
+
+    # 按 leader keys 排
+    def _leader_key(item: dict[str, Any]) -> tuple[int, int, int, int, str]:
+        return (
+            -item["continuous_top20_days"],
+            -item["last_20_top20_days"],
+            -item["last_20_inflow_days"],
+            -item["main_inflow_wan_x10000"],
+            item["sector_code"],
+        )
+
+    all_items.sort(key=_leader_key)
+
+    return {
+        "trade_date": ctx["latest_date"],
+        "sector_type": sector_type,
+        "items": all_items[:n],
     }
