@@ -10,6 +10,7 @@ import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
 import SectorPersistence from '../components/dashboard/SectorPersistence.vue'
 import SectorPersistenceLeaders from '../components/dashboard/SectorPersistenceLeaders.vue'
+import SectorTrends from '../components/dashboard/SectorTrends.vue'
 import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
@@ -20,6 +21,7 @@ import type {
   MarketSnapshot,
   SectorPersistenceLeadersResponse,
   SectorPersistenceResponse,
+  SectorTrendsResponse,
   TopFunds,
   TopSectors,
 } from '../types'
@@ -82,6 +84,11 @@ const persistenceLeadersError = ref('')
 const holdingAlertsStatus = ref<Status>('loading')
 const holdingAlertsData = ref<HoldingSectorAlertsResponse | null>(null)
 const holdingAlertsError = ref('')
+
+// PR25:20 天资金趋势(复用 leaders 选板块)
+const trendsStatus = ref<Status>('loading')
+const trendsData = ref<SectorTrendsResponse | null>(null)
+const trendsError = ref('')
 
 // 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
 // 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
@@ -200,6 +207,17 @@ onMounted(() => {
         holdingAlertsStatus.value = 'error'
       },
     ),
+    // PR25:20 天资金趋势(industry,10 条;跟 leaders 同顺序)
+    dashboardApi.sectorTrends(10, 'industry').then(
+      (d) => {
+        trendsData.value = d
+        trendsStatus.value = 'ready'
+      },
+      (e) => {
+        trendsError.value = _errMsg(e)
+        trendsStatus.value = 'error'
+      },
+    ),
     // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
     // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
     dashboardApi.topSectors(100, 'all').then(
@@ -253,7 +271,14 @@ onMounted(() => {
       :error="persistenceLeadersError"
     />
 
-    <!-- 4c. 持仓-板块事实提醒(PR23)-->
+    <!-- 4c. 20 天资金趋势(PR25 — 跟 leaders 同板块同顺序的 sparkline)-->
+    <SectorTrends
+      :status="trendsStatus"
+      :data="trendsData"
+      :error="trendsError"
+    />
+
+    <!-- 4d. 持仓-板块事实提醒(PR23)-->
     <HoldingSectorAlerts
       :status="holdingAlertsStatus"
       :data="holdingAlertsData"

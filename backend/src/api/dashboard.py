@@ -41,6 +41,8 @@ from src.schemas.dashboard import (
     SectorPersistenceLeaderItem,
     SectorPersistenceLeadersResponse,
     SectorPersistenceResponse,
+    SectorTrendItem,
+    SectorTrendsResponse,
     TopFundResponse,
     TopFundsResponse,
     TopSectorsResponse,
@@ -54,6 +56,7 @@ from src.services.radar import build_intraday_radar
 from src.services.sector_persistence import (
     build_persistence_leaders,
     build_sector_persistence,
+    build_sector_trends,
 )
 from src.utils.date_helper import cn_now
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
@@ -431,6 +434,60 @@ def get_sector_persistence_leaders(
         sector_type=raw["sector_type"],
         min_days=raw["min_days"],
         items=[_to_leader_item(it) for it in raw["items"]],
+    )
+
+
+# =====================================================================
+# 20 天资金趋势(PR25)
+# =====================================================================
+
+_YI_DIVISOR = Decimal(100_000_000)  # _x10000 → 亿元
+
+
+def _to_trend_item(d: dict[str, Any]) -> SectorTrendItem:
+    """service dict → Pydantic;_x10000 → Decimal 亿元(列表逐元素转)。"""
+    return SectorTrendItem(
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        continuous_top20_days=d["continuous_top20_days"],
+        last_20_top20_days=d["last_20_top20_days"],
+        last_20_inflow_days=d["last_20_inflow_days"],
+        latest_main_inflow_yi=Decimal(d["latest_main_inflow_wan_x10000"]) / _YI_DIVISOR,
+        trend_20d=[Decimal(v) / _YI_DIVISOR for v in d["trend_20d_wan_x10000"]],
+    )
+
+
+@router.get("/sector-trends", response_model=SectorTrendsResponse)
+def get_sector_trends(
+    n: int = Query(10, ge=1, le=100, description="Top N(1..100,默认 10)"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry",
+        description="过滤板块类型;all = industry + concept 混合"
+    ),
+    db: Session = Depends(get_session),
+) -> SectorTrendsResponse:
+    """20 天主力净流入趋势(每个 leader 板块输出按时间正序的亿元序列)。
+
+    R3 红线:**不是预测、不是评分、不是买卖建议**。trend_20d 是客观
+    历史观察值序列(亿元)。
+
+    数据源:sector_flow_daily(收盘累计);**不读** intraday。
+
+    板块选择 & 顺序:直接复用 build_persistence_leaders(min_days=3,
+    跟 PR24 默认一致 — 排除"今天刚上榜"的噪声)。
+
+    trend_20d:
+    - 按时间正序(最旧 → 最新)
+    - 最长 20 个元素
+    - 该板块在某交易日没记录 → 跳过(不补 0、不补 null)
+
+    空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
+    """
+    raw = build_sector_trends(db, n=n, sector_type=sector_type)
+    return SectorTrendsResponse(
+        trade_date=raw["trade_date"],
+        sector_type=raw["sector_type"],
+        items=[_to_trend_item(it) for it in raw["items"]],
     )
 
 

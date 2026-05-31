@@ -13,6 +13,7 @@ import type {
   MarketSnapshot,
   SectorPersistenceLeadersResponse,
   SectorPersistenceResponse,
+  SectorTrendsResponse,
   TopFunds,
   TopSectors,
 } from '../types'
@@ -116,5 +117,13 @@ export const dashboardApi = {
   holdingSectorAlerts: (n: number = 10) =>
     jsonFetch<HoldingSectorAlertsResponse>(
       `${BASE}/dashboard/holding-sector-alerts?n=${n}`
+    ),
+  // PR25:20 天资金趋势(复用 leaders 选板块)
+  sectorTrends: (
+    n: number = 10,
+    sectorType: SectorTypeFilter = 'industry',
+  ) =>
+    jsonFetch<SectorTrendsResponse>(
+      `${BASE}/dashboard/sector-trends?n=${n}&sector_type=${sectorType}`
     ),
 }

@@ -318,3 +318,97 @@ def build_persistence_leaders(
         "min_days": min_days,
         "items": filtered[:n],
     }
+
+
+# =====================================================================
+# PR25 — 20 天资金趋势(基于 leaders 的板块选择)
+# =====================================================================
+
+
+def build_sector_trends(
+    session: Session,
+    *,
+    n: int = 10,
+    sector_type: str = "industry",
+    min_days: int = 3,
+) -> dict[str, Any]:
+    """20 天主力净流入趋势(对每个 leader 板块输出按时间正序的序列)。
+
+    R3 红线:trend_20d 是**客观历史数值**(亿元),不是评分 / 预测。
+
+    数据源固定 sector_flow_daily;**不读** intraday(避免盘中噪音)。
+
+    板块选择:直接复用 build_persistence_leaders(n, sector_type, min_days)
+    的排序与过滤 — 即"连续Top20排行榜里的板块"。
+
+    trend_20d 规则:
+    - 取最近 20 个交易日(ctx.windowed_dates[20],时间倒序的 list)
+    - 对每个 leader 板块,在这 20 个日期里查 sector_flow_daily 行
+    - 该日期没记录 → 跳过(spec:"不足20返回已有天数")
+    - 拿到的 main_inflow 按时间**正序**(最旧 → 最新)输出 _x10000 整数
+    - 最长 20 个元素,实际可能更少(刚上市 / 数据缺失)
+
+    Returns:
+      {
+        "trade_date": date | None,
+        "sector_type": str,
+        "items": [
+          {
+            "sector_code": str,
+            "sector_name": str,
+            "continuous_top20_days": int,
+            "last_20_top20_days": int,
+            "last_20_inflow_days": int,
+            "latest_main_inflow_wan_x10000": int,
+            "trend_20d_wan_x10000": list[int],  # oldest → newest
+          },
+          ...
+        ]
+      }
+    """
+    ctx = _load_context(session)
+    if ctx is None:
+        return {
+            "trade_date": None,
+            "sector_type": sector_type,
+            "items": [],
+        }
+
+    leaders = build_persistence_leaders(
+        session, n=n, sector_type=sector_type, min_days=min_days
+    )
+    if not leaders["items"]:
+        return {
+            "trade_date": ctx["latest_date"],
+            "sector_type": sector_type,
+            "items": [],
+        }
+
+    last_20_dates_desc: list[date] = ctx["windowed_dates"][20]
+    items: list[dict[str, Any]] = []
+    for leader in leaders["items"]:
+        code = leader["sector_code"]
+        sector_hist = ctx["history_by_code"].get(code, {})
+        # 收集 last_20_dates_desc 上有记录的 _x10000(desc 顺序)
+        values_desc: list[int] = []
+        for d in last_20_dates_desc:
+            row = sector_hist.get(d)
+            if row is None:
+                continue
+            values_desc.append(row.main_inflow_wan_x10000)
+        # 反转:oldest → newest
+        trend = list(reversed(values_desc))
+        items.append({
+            "sector_code": code,
+            "sector_name": leader["sector_name"],
+            "continuous_top20_days": leader["continuous_top20_days"],
+            "last_20_top20_days": leader["last_20_top20_days"],
+            "last_20_inflow_days": leader["last_20_inflow_days"],
+            "latest_main_inflow_wan_x10000": leader["main_inflow_wan_x10000"],
+            "trend_20d_wan_x10000": trend,
+        })
+    return {
+        "trade_date": ctx["latest_date"],
+        "sector_type": sector_type,
+        "items": items,
+    }

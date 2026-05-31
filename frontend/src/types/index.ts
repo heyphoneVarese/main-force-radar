@@ -191,6 +191,24 @@ export interface HoldingSectorAlertsResponse {
   items: HoldingSectorAlertItem[]
 }
 
+// PR25:20 天资金趋势(每条板块 = leaders 选出的对象 + 历史亿元序列)
+// R3 红线:trend_20d 是客观历史观察值,不是评分/预测。
+export interface SectorTrendItem {
+  sector_code: string
+  sector_name: string
+  continuous_top20_days: number
+  last_20_top20_days: number
+  last_20_inflow_days: number
+  latest_main_inflow_yi: string                // Decimal 亿元
+  trend_20d: string[]                          // 正序;长度 ≤ 20;Decimal 亿元
+}
+
+export interface SectorTrendsResponse {
+  trade_date: string | null
+  sector_type: 'industry' | 'concept' | 'all'
+  items: SectorTrendItem[]
+}
+
 export interface IntradayTopSectors {
   trade_date: string | null
   snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻

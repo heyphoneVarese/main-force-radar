@@ -585,3 +585,47 @@ class HoldingSectorAlertsResponse(BaseModel):
         description="按 (holding_count, continuous_top20, |intraday|, name) 排;"
                     "最多 n 条(默认 10)"
     )
+
+
+# =====================================================================
+# 20 天资金趋势(PR25)
+# =====================================================================
+
+
+class SectorTrendItem(BaseModel):
+    """单条板块趋势(PR25)。
+
+    R3 红线:trend_20d 是**历史观察值序列**(亿元),不是评分 / 预测。
+    """
+
+    sector_code: str
+    sector_name: str
+    continuous_top20_days: int = Field(ge=0)
+    last_20_top20_days: int = Field(ge=0, le=20)
+    last_20_inflow_days: int = Field(ge=0, le=20)
+    latest_main_inflow_yi: Decimal = Field(
+        description="最新日主力净流入,亿元(= leader 的 main_inflow / 1e8)"
+    )
+    trend_20d: list[Decimal] = Field(
+        max_length=20,
+        description="按时间正序(oldest → newest)的主力净流入序列,"
+                    "亿元;长度 ≤ 20,该板块在某交易日没记录 → 跳过该位置"
+    )
+
+
+class SectorTrendsResponse(BaseModel):
+    """20 天资金趋势响应(PR25)。
+
+    板块选择 & 排序复用 build_persistence_leaders(默认 min_days=3,
+    跟 PR24 一致 — 排除"今天刚上榜"的噪声)。
+
+    空库 → trade_date=null, items=[];leaders 过滤后为空 → 同。
+    """
+
+    trade_date: date | None = Field(
+        description="sector_flow_daily 最新交易日;空 → null"
+    )
+    sector_type: str = Field(description="industry / concept / all 回显")
+    items: list[SectorTrendItem] = Field(
+        description="顺序跟 leaders 一致;最多 n 条(默认 10)"
+    )
