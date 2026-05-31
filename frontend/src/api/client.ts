@@ -6,6 +6,7 @@ import type {
   FundCreate,
   Holding,
   HoldingCreate,
+  HoldingSectorAlertsResponse,
   HoldingsSummary,
   HoldingUpdate,
   IntradayTopSectors,
@@ -108,5 +109,10 @@ export const dashboardApi = {
   ) =>
     jsonFetch<SectorPersistenceLeadersResponse>(
       `${BASE}/dashboard/sectors/persistence/leaders?n=${n}&sector_type=${sectorType}`
+    ),
+  // PR23:持仓-板块事实预警
+  holdingSectorAlerts: (n: number = 10) =>
+    jsonFetch<HoldingSectorAlertsResponse>(
+      `${BASE}/dashboard/holding-sector-alerts?n=${n}`
     ),
 }

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { dashboardApi, type SectorTypeFilter } from '../api/client'
 import AiSummary from '../components/dashboard/AiSummary.vue'
 import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
+import HoldingSectorAlerts from '../components/dashboard/HoldingSectorAlerts.vue'
 import MainRadar from '../components/dashboard/MainRadar.vue'
 import MarketTemp from '../components/dashboard/MarketTemp.vue'
 import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
@@ -13,6 +14,7 @@ import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
   DashboardRadarResponse,
+  HoldingSectorAlertsResponse,
   HoldingsSummary,
   IntradayTopSectors,
   MarketSnapshot,
@@ -75,6 +77,11 @@ const persistenceError = ref('')
 const persistenceLeadersStatus = ref<Status>('loading')
 const persistenceLeadersData = ref<SectorPersistenceLeadersResponse | null>(null)
 const persistenceLeadersError = ref('')
+
+// PR23:持仓-板块事实预警(把板块连续性 + 盘中实时连接到我的持仓)
+const holdingAlertsStatus = ref<Status>('loading')
+const holdingAlertsData = ref<HoldingSectorAlertsResponse | null>(null)
+const holdingAlertsError = ref('')
 
 // 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
 // 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
@@ -182,6 +189,17 @@ onMounted(() => {
         persistenceLeadersStatus.value = 'error'
       },
     ),
+    // PR23:持仓-板块事实预警(默认 10 条)
+    dashboardApi.holdingSectorAlerts(10).then(
+      (d) => {
+        holdingAlertsData.value = d
+        holdingAlertsStatus.value = 'ready'
+      },
+      (e) => {
+        holdingAlertsError.value = _errMsg(e)
+        holdingAlertsStatus.value = 'error'
+      },
+    ),
     // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
     // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
     dashboardApi.topSectors(100, 'all').then(
@@ -233,6 +251,13 @@ onMounted(() => {
       :status="persistenceLeadersStatus"
       :data="persistenceLeadersData"
       :error="persistenceLeadersError"
+    />
+
+    <!-- 4c. 持仓-板块事实提醒(PR23)-->
+    <HoldingSectorAlerts
+      :status="holdingAlertsStatus"
+      :data="holdingAlertsData"
+      :error="holdingAlertsError"
     />
 
     <!-- 5. 主力雷达(PR16 — intraday 板块 → 基金映射)-->

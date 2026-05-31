@@ -26,6 +26,8 @@ from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
     DashboardRadarResponse,
+    HoldingSectorAlertItem,
+    HoldingSectorAlertsResponse,
     HoldingSignalResponse,
     HoldingsSummaryResponse,
     IntradayTopSectorsResponse,
@@ -47,6 +49,7 @@ from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
+from src.services.holding_sector_alerts import build_holding_sector_alerts
 from src.services.radar import build_intraday_radar
 from src.services.sector_persistence import (
     build_persistence_leaders,
@@ -672,4 +675,71 @@ def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
         trade_date=raw["trade_date"],
         summary=raw["summary"],
         generated_at=raw["generated_at"],
+    )
+
+
+# =====================================================================
+# 持仓-板块事实预警(PR23)
+# =====================================================================
+
+
+def _to_alert_item(d: dict[str, Any]) -> HoldingSectorAlertItem:
+    """service dict → Pydantic;intraday _x10000 → Decimal 亿元 + 百分数。"""
+    intraday_wan_x10000 = d["intraday_main_inflow_wan_x10000"]
+    intraday_yi = (
+        Decimal(intraday_wan_x10000) / Decimal(100_000_000)
+        if intraday_wan_x10000 is not None else None
+    )
+    intraday_cp_x10000 = d["intraday_change_pct_x10000"]
+    intraday_change_pct = (
+        Decimal(intraday_cp_x10000) / Decimal(100)
+        if intraday_cp_x10000 is not None else None
+    )
+    return HoldingSectorAlertItem(
+        sector_name=d["sector_name"],
+        sector_code=d["sector_code"],
+        holding_count=d["holding_count"],
+        holding_fund_codes=d["holding_fund_codes"],
+        holding_fund_names=d["holding_fund_names"],
+        intraday_main_inflow_yi=intraday_yi,
+        intraday_rank=d["intraday_rank"],
+        intraday_change_pct=intraday_change_pct,
+        continuous_top20_days=d["continuous_top20_days"],
+        continuous_inflow_days=d["continuous_inflow_days"],
+        continuous_outflow_days=d["continuous_outflow_days"],
+        last_20_top20_days=d["last_20_top20_days"],
+        last_20_inflow_days=d["last_20_inflow_days"],
+        last_20_outflow_days=d["last_20_outflow_days"],
+        alert_type=d["alert_type"],
+        message=d["message"],
+    )
+
+
+@router.get(
+    "/holding-sector-alerts", response_model=HoldingSectorAlertsResponse
+)
+def get_holding_sector_alerts(
+    n: int = Query(10, ge=1, le=100, description="返回 Top N(1..100,默认 10)"),
+    db: Session = Depends(get_session),
+) -> HoldingSectorAlertsResponse:
+    """持仓-板块事实预警(PR23)。
+
+    R3 红线:**不是买卖建议**。alert_type 是内部分类标签;message 是事实
+    陈述,不含 买入/卖出/加仓/减仓/推荐/建议/看多/看空/危险/机会/应该。
+
+    数据源:
+    - holdings + funds.related_sectors → 每个 sector 的持仓基金数
+    - sector_flow_daily(daily 连续性事实,industry)
+    - intraday_sector_flow 最新 snapshot(industry,可选)
+
+    边界:
+    - 空 sector_flow_daily 或空 holdings → items=[]
+    - intraday 为空 → snapshot_time=null,各 item intraday_* 为 null,
+      但 C/D 类预警仍可生成
+    """
+    raw = build_holding_sector_alerts(db, n=n)
+    return HoldingSectorAlertsResponse(
+        trade_date=raw["trade_date"],
+        snapshot_time=raw["snapshot_time"],
+        items=[_to_alert_item(it) for it in raw["items"]],
     )

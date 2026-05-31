@@ -480,3 +480,101 @@ class AISummaryResponse(BaseModel):
     cached: bool = Field(
         description="只在 source='daily_cached' 且命中 24h 缓存时为 true;intraday 路径恒为 false"
     )
+
+
+# =====================================================================
+# 持仓-板块事实预警(PR23)
+# =====================================================================
+
+
+class HoldingSectorAlertItem(BaseModel):
+    """单条持仓-板块事实提醒(PR23)。
+
+    R3 红线:
+    - alert_type 是**内部分类标签**,不等于买卖信号
+    - message 是**客观事实陈述**,不出现 买入/卖出/加仓/减仓/推荐/建议/
+      看多/看空/危险/机会/应该 等词
+    - 所有数值字段是事实计数 / 当前观察值,不是评分
+
+    intraday_* 在 intraday 库为空时全为 null;此时 A/B 类(intraday_*)
+    无法触发,但 C(continuous_outflow)和 D(concentrated)仍可触发。
+    """
+
+    sector_name: str
+    sector_code: str = Field(
+        description="优先取 intraday 同名 sector_code;intraday 无则取 daily 行的"
+    )
+
+    holding_count: int = Field(
+        ge=1,
+        description="我持仓基金中 related_sectors 含 sector_name 的只数"
+    )
+    holding_fund_codes: list[str] = Field(
+        description="全部命中持仓的 fund_code(前端可自行截前 N)"
+    )
+    holding_fund_names: list[str] = Field(
+        description="对应的 fund_name,顺序与 codes 一一对应"
+    )
+
+    intraday_main_inflow_yi: Decimal | None = Field(
+        default=None,
+        description="该板块最新 snapshot 主力净流入,亿元;intraday 库空 → null"
+    )
+    intraday_rank: int | None = Field(
+        default=None,
+        description="该板块在最新 snapshot industry 内的排名(1-based);空 → null"
+    )
+    intraday_change_pct: Decimal | None = Field(
+        default=None,
+        description="该板块涨跌幅,百分数(-6.40 表 -6.40%);空 → null"
+    )
+
+    continuous_top20_days: int = Field(ge=0)
+    continuous_inflow_days: int = Field(ge=0)
+    continuous_outflow_days: int = Field(ge=0)
+
+    last_20_top20_days: int = Field(ge=0, le=20)
+    last_20_inflow_days: int = Field(ge=0, le=20)
+    last_20_outflow_days: int = Field(ge=0, le=20)
+
+    alert_type: str = Field(
+        description=(
+            "内部分类(不等于买卖信号):"
+            "intraday_outflow_on_long_persistence / "
+            "intraday_inflow_on_long_persistence / "
+            "continuous_outflow_holding_sector / "
+            "concentrated_holding_sector"
+        )
+    )
+    message: str = Field(
+        description="客观事实陈述;不含 买入/卖出/加仓/减仓/推荐/建议/看多/"
+                    "看空/危险/机会/应该 等词"
+    )
+
+
+class HoldingSectorAlertsResponse(BaseModel):
+    """持仓-板块事实预警响应(PR23)。
+
+    排序键(DESC,最后 sector_name ASC 兜底):
+      1. holding_count
+      2. continuous_top20_days
+      3. abs(intraday_main_inflow_yi)  (null 当作 0)
+      4. sector_name (ASC)
+
+    边界:
+    - sector_flow_daily 为空 → trade_date=null, snapshot_time=null, items=[]
+    - 无 holdings → items=[]
+    - intraday 为空 → snapshot_time=null,各 item 的 intraday_* 字段 null,
+      但仍可基于 daily persistence 生成 C/D 类预警
+    """
+
+    trade_date: date | None = Field(
+        description="daily persistence 最新交易日;sector_flow_daily 空 → null"
+    )
+    snapshot_time: datetime | None = Field(
+        description="intraday 最新 snapshot(Asia/Shanghai naive);空 → null"
+    )
+    items: list[HoldingSectorAlertItem] = Field(
+        description="按 (holding_count, continuous_top20, |intraday|, name) 排;"
+                    "最多 n 条(默认 10)"
+    )

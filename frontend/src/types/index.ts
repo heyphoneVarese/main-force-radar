@@ -149,6 +149,46 @@ export interface SectorPersistenceLeadersResponse {
   items: SectorPersistenceLeaderItem[]
 }
 
+// PR23:持仓-板块事实预警单条
+// R3 红线:alert_type 是内部分类(不等于买卖信号);message 是事实陈述,
+// 不出现 买入/卖出/加仓/减仓/推荐/建议/看多/看空/危险/机会/应该。
+export type HoldingSectorAlertType =
+  | 'intraday_outflow_on_long_persistence'
+  | 'intraday_inflow_on_long_persistence'
+  | 'continuous_outflow_holding_sector'
+  | 'concentrated_holding_sector'
+
+export interface HoldingSectorAlertItem {
+  sector_name: string
+  sector_code: string
+
+  holding_count: number
+  holding_fund_codes: string[]
+  holding_fund_names: string[]
+
+  // intraday 字段在 intraday 库为空时 null
+  intraday_main_inflow_yi: string | null       // Decimal 亿元
+  intraday_rank: number | null
+  intraday_change_pct: string | null           // Decimal 百分数(-6.40 = -6.40%)
+
+  continuous_top20_days: number
+  continuous_inflow_days: number
+  continuous_outflow_days: number
+
+  last_20_top20_days: number
+  last_20_inflow_days: number
+  last_20_outflow_days: number
+
+  alert_type: HoldingSectorAlertType
+  message: string
+}
+
+export interface HoldingSectorAlertsResponse {
+  trade_date: string | null
+  snapshot_time: string | null                 // ISO datetime;intraday 空 → null
+  items: HoldingSectorAlertItem[]
+}
+
 export interface IntradayTopSectors {
   trade_date: string | null
   snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻
