@@ -629,3 +629,109 @@ class SectorTrendsResponse(BaseModel):
     items: list[SectorTrendItem] = Field(
         description="顺序跟 leaders 一致;最多 n 条(默认 10)"
     )
+
+
+# =====================================================================
+# 持仓-事实摘要(PR26)— 取代旧情绪系统(bullish/bearish/warning/neutral)
+# =====================================================================
+
+
+class HoldingFactItem(BaseModel):
+    """单只持仓的事实摘要(PR26)。
+
+    R3 红线:
+    - **不含** signal_type / bullish / bearish / warning / neutral / score /
+      health / rating 等情绪 / 评分字段
+    - mapped_sector=null 表示该基金 related_sectors 在最新日 sector_flow_daily
+      里找不到匹配 → 归入 buckets.unmapped
+    - 数值字段在未映射时全为 null
+    """
+
+    fund_code: str
+    fund_name: str
+    related_sectors: list[str] = Field(
+        description="funds.related_sectors 中文标签(原样透传)"
+    )
+
+    # === 映射板块(可能 null = 未映射)===
+    mapped_sector: str | None = Field(
+        default=None,
+        description="在 related_sectors 中选中的板块标签(中文),按 "
+                    "continuous_top20_days DESC 选最持续的;未映射 → null"
+    )
+    sector_code: str | None = Field(
+        default=None,
+        description="mapped_sector 对应 sector_flow_daily 行的 BK code"
+    )
+    sector_name: str | None = Field(
+        default=None,
+        description="mapped_sector 对应 sector_flow_daily 行的 sector_name"
+                    "(语义同 mapped_sector;同名 industry 优先)"
+    )
+    purity_score: int | None = Field(
+        default=None, ge=0, le=9,
+        description="基金主题贴合度(PR17 公式,复用 _compute_purity_score);"
+                    "0..9;**不是**收益预测、不是买卖建议;未映射 → null"
+    )
+
+    # === sector 持续性事实(_compute_facts;未映射 → null)===
+    continuous_top20_days: int | None = Field(default=None, ge=0)
+    last_20_top20_days: int | None = Field(default=None, ge=0, le=20)
+    last_20_inflow_days: int | None = Field(default=None, ge=0, le=20)
+
+    # === 最新日 daily 数值 ===
+    latest_main_inflow_yi: Decimal | None = Field(
+        default=None,
+        description="最新日主力净流入,亿元"
+    )
+    change_pct: Decimal | None = Field(
+        default=None,
+        description="最新日涨跌幅(小数;0.0234 = 2.34%,跟 sectors/top 同口径)"
+    )
+
+    # === 盘中(可选)===
+    intraday_main_inflow_yi: Decimal | None = Field(
+        default=None,
+        description="该板块最新 snapshot 主力净流入,亿元;intraday 空 → null"
+    )
+    intraday_change_pct: Decimal | None = Field(
+        default=None,
+        description="盘中涨跌幅,百分数(-6.40 表 -6.40%);空 → null"
+    )
+
+
+class HoldingFactsBuckets(BaseModel):
+    """顶部统计(PR26)— 按 continuous_top20_days 分四档,**不含**情绪计数。"""
+
+    persistence_ge_20: int = Field(ge=0, description="连续Top20 ≥ 20 天")
+    persistence_5_to_19: int = Field(ge=0, description="连续Top20 5..19 天")
+    persistence_lt_5: int = Field(
+        ge=0,
+        description="连续Top20 < 5 天(含 0 天)"
+    )
+    unmapped: int = Field(
+        ge=0, description="related_sectors 在最新日 sector_flow_daily 没匹配"
+    )
+    total: int = Field(ge=0, description="= sum 四档")
+
+
+class HoldingFactsSummaryResponse(BaseModel):
+    """持仓-事实摘要响应(PR26)。
+
+    R3 红线:**不再返回** signal_type 等情绪字段;buckets 是客观计数。
+
+    空持仓 → buckets 全 0, holdings=[]。
+    sector_flow_daily 为空 → 全部持仓 unmapped(可以仍返回 holdings 列表,
+    数值字段都 null,buckets.unmapped = len)。
+    """
+
+    trade_date: date | None = Field(
+        description="sector_flow_daily 最新交易日;空 → null"
+    )
+    snapshot_time: datetime | None = Field(
+        description="intraday 最新 snapshot;intraday 空 → null"
+    )
+    buckets: HoldingFactsBuckets
+    holdings: list[HoldingFactItem] = Field(
+        description="按 fund_code ASC(跟旧 /holdings-summary 同顺序)"
+    )

@@ -6,6 +6,7 @@ import type {
   FundCreate,
   Holding,
   HoldingCreate,
+  HoldingFactsSummary,
   HoldingSectorAlertsResponse,
   HoldingsSummary,
   HoldingUpdate,
@@ -89,6 +90,9 @@ export const dashboardApi = {
     ),
   holdingsSummary: () =>
     jsonFetch<HoldingsSummary>(`${BASE}/dashboard/holdings-summary`),
+  // PR26:持仓-事实摘要(替代情绪系统)
+  holdingsFacts: () =>
+    jsonFetch<HoldingFactsSummary>(`${BASE}/dashboard/holdings-facts`),
   topFunds: (n: number = 20) =>
     jsonFetch<TopFunds>(`${BASE}/dashboard/funds/top?n=${n}`),
   aiSummary: () => jsonFetch<AISummary>(`${BASE}/dashboard/ai-summary`),

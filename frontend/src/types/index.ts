@@ -209,6 +209,46 @@ export interface SectorTrendsResponse {
   items: SectorTrendItem[]
 }
 
+// PR26:持仓-事实摘要(替换旧情绪系统 HoldingsSummary)
+// R3 红线:**不含** signal_type / bullish / bearish / warning / neutral /
+// persistence_score / health / rating。
+export interface HoldingFactItem {
+  fund_code: string
+  fund_name: string
+  related_sectors: string[]
+
+  // 未映射时全 null
+  mapped_sector: string | null
+  sector_code: string | null
+  sector_name: string | null
+  purity_score: number | null
+
+  continuous_top20_days: number | null
+  last_20_top20_days: number | null
+  last_20_inflow_days: number | null
+
+  latest_main_inflow_yi: string | null    // Decimal 亿元
+  change_pct: string | null               // Decimal 小数(0.0234 = 2.34%)
+
+  intraday_main_inflow_yi: string | null
+  intraday_change_pct: string | null      // Decimal 百分数(-6.40 = -6.40%)
+}
+
+export interface HoldingFactsBuckets {
+  persistence_ge_20: number       // 连续Top20 ≥20 天
+  persistence_5_to_19: number     // 5..19 天
+  persistence_lt_5: number        // <5 天(含 0)
+  unmapped: number                // 没匹配到 sector
+  total: number
+}
+
+export interface HoldingFactsSummary {
+  trade_date: string | null
+  snapshot_time: string | null
+  buckets: HoldingFactsBuckets
+  holdings: HoldingFactItem[]
+}
+
 export interface IntradayTopSectors {
   trade_date: string | null
   snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻

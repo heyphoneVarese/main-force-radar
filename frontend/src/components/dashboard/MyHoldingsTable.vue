@@ -1,93 +1,75 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
-import type { HoldingSignal, HoldingsSummary } from '../../types'
+import type { HoldingFactItem, HoldingFactsSummary } from '../../types'
 
-// 我的持仓明细卡(Phase 5.1 PR10)。
+// 我的持仓分析(PR26 重构)— 取代情绪系统(bullish/bearish/warning/
+// neutral)。卡片只显示客观事实:
+//   每只持仓 → mapped_sector + 连续Top20天数 + 近20日Top20/流入次数 +
+//             最新收盘净流入 + 盘中净流入(如果存在)
+//   顶部 buckets → 按 continuous_top20_days 分四档计数
 //
-// 响应式策略:跟 Holdings.vue 同款 useMediaQuery 768px 分界 —
-//   < 768px → 卡片堆叠
-//   ≥ 768px → 表格
-// 渲染分支只走一边,DOM 节点不翻倍。
-//
-// 顶部加 signal_type 计数横条:42 只持仓滚动前先给鸟瞰图。
+// R3 红线:
+//  - **不出现** bullish / bearish / warning / neutral / signal_type /
+//    persistence_score / score / health / rating / 任何情绪词
+//  - 不出现 买入 / 卖出 / 加仓 / 减仓 / 推荐 / 建议 / 看多 / 看空 /
+//    危险 / 机会 / 应该
+//  - 红/绿配色只用于"资金流向"(A 股惯例:红 +,绿 -),不携带评价语义
 
 defineProps<{
   status: 'loading' | 'ready' | 'error'
-  data: HoldingsSummary | null
+  data: HoldingFactsSummary | null
   error: string
 }>()
 
 const isMobile = useMediaQuery('(max-width: 768px)')
 
-// ===== signal_type → 视觉 =====
-// R3.1 红线:5 个状态词都是情绪描述,绝不出现 buy/sell/long/short/hold。
+// ===== 格式化 =====
 
-function signalPillClass(sig: string): string {
-  // 配色:bullish 红强 / bearish 绿弱 / warning 橙 / neutral 灰 / N/A 淡灰
-  switch (sig) {
-    case 'bullish':
-      return 'bg-red-50 text-red-700 border-red-200'
-    case 'bearish':
-      return 'bg-green-50 text-green-700 border-green-200'
-    case 'warning':
-      return 'bg-orange-50 text-orange-700 border-orange-200'
-    case 'neutral':
-      return 'bg-gray-100 text-gray-600 border-gray-200'
-    case 'not_applicable':
-      return 'bg-gray-50 text-gray-400 border-gray-100'
-    default:
-      return 'bg-gray-100 text-gray-600 border-gray-200'
-  }
+function fmtYi(yi: string | null | undefined): string {
+  if (yi === null || yi === undefined) return '—'
+  const n = Number(yi)
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(1)}亿`
 }
 
-function scoreChipClass(score: number): string {
-  // 跟 TopFunds 同口径:8-9 emerald 强 / 6-7 blue 普通 / <6 gray 弱
-  if (score >= 8) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-  if (score >= 6) return 'bg-blue-50 text-blue-700 border-blue-200'
-  return 'bg-gray-100 text-gray-500 border-gray-200'
-}
-
-function signalCounts(holdings: HoldingSignal[]): Array<[string, number]> {
-  const counts: Record<string, number> = {}
-  for (const h of holdings) {
-    counts[h.signal_type] = (counts[h.signal_type] || 0) + 1
-  }
-  const order = ['bullish', 'warning', 'neutral', 'bearish', 'not_applicable']
-  return order
-    .filter((k) => k in counts)
-    .map((k) => [k, counts[k]] as [string, number])
-}
-
-// ===== 金额/百分数格式化 =====
-
-function fmtYi(wanStr: string | null | undefined): string {
-  if (wanStr === null || wanStr === undefined) return '—'
-  const yi = Number(wanStr) / 10_000
-  const sign = yi > 0 ? '+' : ''
-  return `${sign}${yi.toFixed(1)}亿`
-}
-
-function fmtPct(decStr: string | null | undefined): string {
+function fmtPctFraction(decStr: string | null | undefined): string {
+  // change_pct 是小数(0.0234 = 2.34%)
   if (decStr === null || decStr === undefined) return '—'
   const n = Number(decStr) * 100
   const sign = n > 0 ? '+' : ''
   return `${sign}${n.toFixed(2)}%`
 }
 
-function inflowColor(wanStr: string | null | undefined): string {
-  if (wanStr === null || wanStr === undefined) return 'text-gray-400'
-  const n = Number(wanStr)
+function fmtPctPercent(decStr: string | null | undefined): string {
+  // intraday_change_pct 是百分数(-6.40 = -6.40%)
+  if (decStr === null || decStr === undefined) return '—'
+  const n = Number(decStr)
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
+}
+
+function inflowColor(s: string | null | undefined): string {
+  if (s === null || s === undefined) return 'text-gray-400'
+  const n = Number(s)
   if (n > 0) return 'text-red-600'
   if (n < 0) return 'text-green-600'
   return 'text-gray-700'
 }
 
-function pctColor(decStr: string | null | undefined): string {
-  if (decStr === null || decStr === undefined) return 'text-gray-400'
-  const n = Number(decStr)
+function pctColorFraction(s: string | null | undefined): string {
+  if (s === null || s === undefined) return 'text-gray-400'
+  const n = Number(s)
   if (n > 0) return 'text-red-600'
   if (n < 0) return 'text-green-600'
   return 'text-gray-700'
+}
+
+// related_sectors chip 截断:超过 3 个显示 +N
+function visibleSectorChips(item: HoldingFactItem): string[] {
+  return item.related_sectors.slice(0, 3)
+}
+function extraSectorCount(item: HoldingFactItem): number {
+  return Math.max(0, item.related_sectors.length - 3)
 }
 </script>
 
@@ -116,20 +98,32 @@ function pctColor(decStr: string | null | undefined): string {
           暂无持仓(去 Holdings 页添加)
         </p>
         <template v-else>
-          <!-- 鸟瞰:signal_type 计数 -->
+          <!-- 顶部:事实 buckets(取代情绪计数)-->
           <div
-            class="flex flex-wrap items-center gap-2 mb-3 text-xs text-gray-500"
+            class="flex flex-wrap items-center gap-2 mb-3 text-xs text-gray-600"
           >
             <span class="tabular-nums">
-              共 {{ data.holdings.length }} 只 ·
+              共 {{ data.buckets.total }} 只 ·
             </span>
             <span
-              v-for="[sig, count] in signalCounts(data.holdings)"
-              :key="sig"
-              class="px-1.5 py-0.5 rounded border tabular-nums"
-              :class="signalPillClass(sig)"
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-purple-50 text-purple-700 border-purple-200"
             >
-              {{ sig }} {{ count }}
+              连续Top20 ≥20天 {{ data.buckets.persistence_ge_20 }}
+            </span>
+            <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-indigo-50 text-indigo-700 border-indigo-200"
+            >
+              连续Top20 5~19天 {{ data.buckets.persistence_5_to_19 }}
+            </span>
+            <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-gray-100 text-gray-600 border-gray-200"
+            >
+              连续Top20 &lt;5天 {{ data.buckets.persistence_lt_5 }}
+            </span>
+            <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-gray-50 text-gray-400 border-gray-100"
+            >
+              未映射 {{ data.buckets.unmapped }}
             </span>
           </div>
 
@@ -140,74 +134,105 @@ function pctColor(decStr: string | null | undefined): string {
               :key="h.fund_code"
               class="border rounded-md p-3 space-y-2"
             >
-              <!-- 行 1:名 + 信号 chip -->
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm text-gray-900 font-medium truncate">
-                    {{ h.fund_name || h.fund_code }}
-                  </div>
-                  <div class="text-xs text-gray-400 tabular-nums">
-                    {{ h.fund_code }}
-                  </div>
+              <!-- 行 1:fund 名 + code -->
+              <div class="min-w-0">
+                <div class="text-sm text-gray-900 font-medium truncate">
+                  {{ h.fund_name || h.fund_code }}
                 </div>
-                <span
-                  class="text-xs px-2 py-0.5 rounded border whitespace-nowrap shrink-0"
-                  :class="signalPillClass(h.signal_type)"
-                >
-                  {{ h.signal_type }}
-                </span>
+                <div class="text-xs text-gray-400 tabular-nums">
+                  {{ h.fund_code }}
+                </div>
               </div>
 
-              <!-- 行 2:related_sectors chips -->
-              <div
-                v-if="h.related_sectors.length > 0"
-                class="flex flex-wrap gap-1"
-              >
+              <!-- 行 2:related_sectors chips + mapped_sector -->
+              <div class="flex flex-wrap items-center gap-1 text-xs">
                 <span
-                  v-for="s in h.related_sectors"
+                  v-for="s in visibleSectorChips(h)"
                   :key="s"
-                  class="text-[10px] leading-none px-1.5 py-1 rounded bg-gray-100 text-gray-500"
+                  class="text-[10px] leading-none px-1.5 py-1 rounded"
+                  :class="
+                    h.mapped_sector === s
+                      ? 'bg-teal-50 text-teal-700 border border-teal-200'
+                      : 'bg-gray-100 text-gray-500'
+                  "
                 >
                   {{ s }}
                 </span>
+                <span
+                  v-if="extraSectorCount(h) > 0"
+                  class="text-[10px] text-gray-400"
+                >
+                  +{{ extraSectorCount(h) }}
+                </span>
+                <span
+                  v-if="h.mapped_sector === null"
+                  class="text-[10px] text-gray-400 ml-auto"
+                >
+                  未映射
+                </span>
               </div>
 
-              <!-- 行 3:score + via_sector + inflow + change_pct -->
+              <!-- 行 3:持续性事实(只在 mapped 时显示)-->
+              <div
+                v-if="h.mapped_sector !== null"
+                class="grid grid-cols-3 gap-2 text-xs tabular-nums text-gray-600"
+              >
+                <div>
+                  <div class="text-[10px] text-gray-400">连续Top20</div>
+                  <div class="font-medium text-gray-800">
+                    {{ h.continuous_top20_days }} 天
+                  </div>
+                </div>
+                <div>
+                  <div class="text-[10px] text-gray-400">近20日Top20</div>
+                  <div class="font-medium text-gray-800">
+                    {{ h.last_20_top20_days }} 次
+                  </div>
+                </div>
+                <div>
+                  <div class="text-[10px] text-gray-400">近20日流入</div>
+                  <div class="font-medium text-gray-800">
+                    {{ h.last_20_inflow_days }} 天
+                  </div>
+                </div>
+              </div>
+
+              <!-- 行 4:最新收盘 + 盘中 -->
               <div class="flex items-center justify-between text-xs">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span
-                    class="px-1.5 py-0.5 rounded border tabular-nums"
-                    :class="scoreChipClass(h.persistence_score)"
+                <div>
+                  <div class="text-[10px] text-gray-400">最新收盘</div>
+                  <div
+                    class="text-sm font-medium tabular-nums"
+                    :class="inflowColor(h.latest_main_inflow_yi)"
                   >
-                    {{ h.persistence_score }}/9
-                  </span>
-                  <span class="text-gray-500 tabular-nums">
-                    via {{ h.via_sector ?? '—' }}
-                  </span>
+                    {{ fmtYi(h.latest_main_inflow_yi) }}
+                  </div>
+                  <div
+                    class="text-[10px] tabular-nums"
+                    :class="pctColorFraction(h.change_pct)"
+                  >
+                    {{ fmtPctFraction(h.change_pct) }}
+                  </div>
                 </div>
                 <div class="text-right">
-                  <div
-                    class="font-medium tabular-nums"
-                    :class="inflowColor(h.main_inflow_wan)"
-                  >
-                    {{ fmtYi(h.main_inflow_wan) }}
-                  </div>
-                  <div
-                    class="text-[11px] tabular-nums"
-                    :class="pctColor(h.change_pct)"
-                  >
-                    {{ fmtPct(h.change_pct) }}
-                  </div>
+                  <div class="text-[10px] text-gray-400">盘中</div>
+                  <template v-if="h.intraday_main_inflow_yi !== null">
+                    <div
+                      class="text-sm font-medium tabular-nums"
+                      :class="inflowColor(h.intraday_main_inflow_yi)"
+                    >
+                      {{ fmtYi(h.intraday_main_inflow_yi) }}
+                    </div>
+                    <div
+                      class="text-[10px] tabular-nums"
+                      :class="pctColorFraction(h.intraday_change_pct)"
+                    >
+                      {{ fmtPctPercent(h.intraday_change_pct) }}
+                    </div>
+                  </template>
+                  <div v-else class="text-xs text-gray-400">盘中暂无</div>
                 </div>
               </div>
-
-              <!-- 行 4:reason -->
-              <p
-                class="text-[11px] text-gray-400 line-clamp-2"
-                :title="h.reason"
-              >
-                {{ h.reason }}
-              </p>
             </div>
           </div>
 
@@ -215,16 +240,15 @@ function pctColor(decStr: string | null | undefined): string {
           <div v-else class="overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
-                <tr
-                  class="text-xs text-gray-500 border-b text-left font-medium"
-                >
+                <tr class="text-xs text-gray-500 border-b text-left font-medium">
                   <th class="py-2 pr-3">基金</th>
-                  <th class="py-2 px-2 whitespace-nowrap">信号</th>
-                  <th class="py-2 px-2 whitespace-nowrap">持续性</th>
-                  <th class="py-2 px-2 whitespace-nowrap">via</th>
-                  <th class="py-2 px-2 text-right whitespace-nowrap">主力净流入</th>
+                  <th class="py-2 px-2 whitespace-nowrap">映射板块</th>
+                  <th class="py-2 px-2 text-right whitespace-nowrap">连续Top20</th>
+                  <th class="py-2 px-2 text-right whitespace-nowrap">近20日Top20</th>
+                  <th class="py-2 px-2 text-right whitespace-nowrap">近20日流入</th>
+                  <th class="py-2 px-2 text-right whitespace-nowrap">最新收盘</th>
                   <th class="py-2 px-2 text-right whitespace-nowrap">涨跌</th>
-                  <th class="py-2 pl-2">说明</th>
+                  <th class="py-2 pl-2 text-right whitespace-nowrap">盘中</th>
                 </tr>
               </thead>
               <tbody>
@@ -242,54 +266,82 @@ function pctColor(decStr: string | null | undefined): string {
                         {{ h.fund_code }}
                       </span>
                       <span
-                        v-for="s in h.related_sectors"
+                        v-for="s in visibleSectorChips(h)"
                         :key="s"
                         class="text-[10px] leading-none px-1 py-0.5 rounded bg-gray-100 text-gray-500"
                       >
                         {{ s }}
                       </span>
+                      <span
+                        v-if="extraSectorCount(h) > 0"
+                        class="text-[10px] text-gray-400"
+                      >
+                        +{{ extraSectorCount(h) }}
+                      </span>
                     </div>
                   </td>
                   <td class="px-2 whitespace-nowrap">
                     <span
-                      class="text-xs px-2 py-0.5 rounded border"
-                      :class="signalPillClass(h.signal_type)"
+                      v-if="h.mapped_sector !== null"
+                      class="text-xs px-2 py-0.5 rounded border bg-teal-50 text-teal-700 border-teal-200"
                     >
-                      {{ h.signal_type }}
+                      {{ h.mapped_sector }}
                     </span>
-                  </td>
-                  <td class="px-2 whitespace-nowrap">
                     <span
-                      class="text-xs px-1.5 py-0.5 rounded border tabular-nums"
-                      :class="scoreChipClass(h.persistence_score)"
+                      v-else
+                      class="text-xs text-gray-400 italic"
                     >
-                      {{ h.persistence_score }}/9
+                      未映射
                     </span>
                   </td>
-                  <td
-                    class="px-2 whitespace-nowrap text-xs text-gray-500 tabular-nums"
-                  >
-                    {{ h.via_sector ?? '—' }}
+                  <td class="px-2 text-right whitespace-nowrap text-xs tabular-nums text-gray-700">
+                    <template v-if="h.continuous_top20_days !== null">
+                      {{ h.continuous_top20_days }} 天
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+                  <td class="px-2 text-right whitespace-nowrap text-xs tabular-nums text-gray-700">
+                    <template v-if="h.last_20_top20_days !== null">
+                      {{ h.last_20_top20_days }} 次
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+                  <td class="px-2 text-right whitespace-nowrap text-xs tabular-nums text-gray-700">
+                    <template v-if="h.last_20_inflow_days !== null">
+                      {{ h.last_20_inflow_days }} 天
+                    </template>
+                    <template v-else>—</template>
                   </td>
                   <td
                     class="px-2 text-right whitespace-nowrap tabular-nums font-medium"
-                    :class="inflowColor(h.main_inflow_wan)"
+                    :class="inflowColor(h.latest_main_inflow_yi)"
                   >
-                    {{ fmtYi(h.main_inflow_wan) }}
+                    {{ fmtYi(h.latest_main_inflow_yi) }}
                   </td>
                   <td
                     class="px-2 text-right whitespace-nowrap text-xs tabular-nums"
-                    :class="pctColor(h.change_pct)"
+                    :class="pctColorFraction(h.change_pct)"
                   >
-                    {{ fmtPct(h.change_pct) }}
+                    {{ fmtPctFraction(h.change_pct) }}
                   </td>
-                  <td class="pl-2 max-w-sm">
-                    <p
-                      class="text-xs text-gray-500 line-clamp-2"
-                      :title="h.reason"
-                    >
-                      {{ h.reason }}
-                    </p>
+                  <td
+                    class="pl-2 text-right whitespace-nowrap tabular-nums"
+                  >
+                    <template v-if="h.intraday_main_inflow_yi !== null">
+                      <div
+                        class="font-medium"
+                        :class="inflowColor(h.intraday_main_inflow_yi)"
+                      >
+                        {{ fmtYi(h.intraday_main_inflow_yi) }}
+                      </div>
+                      <div
+                        class="text-[11px]"
+                        :class="pctColorFraction(h.intraday_change_pct)"
+                      >
+                        {{ fmtPctPercent(h.intraday_change_pct) }}
+                      </div>
+                    </template>
+                    <span v-else class="text-xs text-gray-400">盘中暂无</span>
                   </td>
                 </tr>
               </tbody>

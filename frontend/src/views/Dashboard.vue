@@ -15,8 +15,8 @@ import TopSectorsCard from '../components/dashboard/TopSectors.vue'
 import type {
   AISummary,
   DashboardRadarResponse,
+  HoldingFactsSummary,
   HoldingSectorAlertsResponse,
-  HoldingsSummary,
   IntradayTopSectors,
   MarketSnapshot,
   SectorPersistenceLeadersResponse,
@@ -53,8 +53,10 @@ const intradaySectorsError = ref('')
 const sectorsMode = ref<'intraday' | 'daily'>('daily')  // 默认安全;intraday 拿到 → 自动切
 const userPickedMode = ref(false)  // 用户手动切过 → 不再自动覆盖
 
+// PR26:holdings 改用 facts(替代旧情绪系统)。HoldingsSummary 类型保留
+// 在 client.ts 给 holdingsSummary() 用,只是 UI 不再消费它。
 const holdingsStatus = ref<Status>('loading')
-const holdingsData = ref<HoldingsSummary | null>(null)
+const holdingsData = ref<HoldingFactsSummary | null>(null)
 const holdingsError = ref('')
 
 const fundsStatus = ref<Status>('loading')
@@ -160,7 +162,8 @@ onMounted(() => {
     ),
     loadSectors(sectorsType.value),
     loadIntradaySectors(sectorsType.value),
-    dashboardApi.holdingsSummary().then(
+    // PR26:holdings 改 facts
+    dashboardApi.holdingsFacts().then(
       (d) => { holdingsData.value = d; holdingsStatus.value = 'ready' },
       (e) => { holdingsError.value = _errMsg(e); holdingsStatus.value = 'error' },
     ),

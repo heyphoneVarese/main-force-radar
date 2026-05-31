@@ -26,6 +26,9 @@ from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
     DashboardRadarResponse,
+    HoldingFactItem,
+    HoldingFactsBuckets,
+    HoldingFactsSummaryResponse,
     HoldingSectorAlertItem,
     HoldingSectorAlertsResponse,
     HoldingSignalResponse,
@@ -51,6 +54,7 @@ from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
+from src.services.holding_facts import build_holding_facts
 from src.services.holding_sector_alerts import build_holding_sector_alerts
 from src.services.radar import build_intraday_radar
 from src.services.sector_persistence import (
@@ -653,6 +657,74 @@ def get_holdings_summary(
     return HoldingsSummaryResponse(
         trade_date=raw["trade_date"],
         holdings=holdings_response,
+    )
+
+
+# =====================================================================
+# 持仓-事实摘要(PR26)— 取代旧情绪系统(/holdings-summary)
+# =====================================================================
+
+
+def _yi(wan_x10000: int | None) -> Decimal | None:
+    return Decimal(wan_x10000) / Decimal(100_000_000) if wan_x10000 is not None else None
+
+
+def _pct_frac(x10000: int | None) -> Decimal | None:
+    """change_pct_x10000 → 小数(0.0234 = 2.34%);跟 sectors/top 同口径。"""
+    return int_to_pct(x10000) if x10000 is not None else None
+
+
+def _pct_percent(x10000: int | None) -> Decimal | None:
+    """change_pct_x10000 → 百分数(2.34 表 2.34%);跟 radar/alerts 同口径。"""
+    return Decimal(x10000) / Decimal(100) if x10000 is not None else None
+
+
+def _to_holding_fact_item(d: dict[str, Any]) -> HoldingFactItem:
+    return HoldingFactItem(
+        fund_code=d["fund_code"],
+        fund_name=d["fund_name"],
+        related_sectors=d["related_sectors"],
+        mapped_sector=d["mapped_sector"],
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        purity_score=d["purity_score"],
+        continuous_top20_days=d["continuous_top20_days"],
+        last_20_top20_days=d["last_20_top20_days"],
+        last_20_inflow_days=d["last_20_inflow_days"],
+        latest_main_inflow_yi=_yi(d["latest_main_inflow_wan_x10000"]),
+        change_pct=_pct_frac(d["change_pct_x10000"]),
+        intraday_main_inflow_yi=_yi(d["intraday_main_inflow_wan_x10000"]),
+        intraday_change_pct=_pct_percent(d["intraday_change_pct_x10000"]),
+    )
+
+
+@router.get(
+    "/holdings-facts", response_model=HoldingFactsSummaryResponse
+)
+def get_holdings_facts(
+    db: Session = Depends(get_session),
+) -> HoldingFactsSummaryResponse:
+    """持仓-事实摘要(PR26)— 取代旧 /holdings-summary 的情绪系统。
+
+    R3 红线:**不再返回** signal_type / bullish / bearish / warning / neutral /
+    persistence_score / reason 等字段。每只持仓返回:
+    - mapped_sector + sector_code + purity_score
+    - 连续Top20天数 / 近20日Top20次数 / 近20日流入天数
+    - 最新日 main_inflow_yi + change_pct(小数)
+    - 盘中 main_inflow_yi + change_pct(百分数);intraday 空 → null
+
+    顶部 buckets 按 continuous_top20_days 分四档:≥20 / 5~19 / <5 / unmapped。
+
+    排序:fund_code ASC(跟旧 /holdings-summary 同顺序)。
+
+    空持仓 → 200 + buckets 全 0 + holdings=[]。
+    """
+    raw = build_holding_facts(db)
+    return HoldingFactsSummaryResponse(
+        trade_date=raw["trade_date"],
+        snapshot_time=raw["snapshot_time"],
+        buckets=HoldingFactsBuckets(**raw["buckets"]),
+        holdings=[_to_holding_fact_item(h) for h in raw["holdings"]],
     )
 
 
