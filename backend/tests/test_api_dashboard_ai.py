@@ -154,83 +154,159 @@ def test_ai_summary_fallback_when_ai_raises(seed_full, client):
 
 
 # =====================================================================
-# AI 成功 → 用 AI 文本
+# PR19 — 新结构化字段 + intraday/daily 双源
 # =====================================================================
+# 旧 Claude/cache 路径相关测试已删 — PR19 API endpoint 不再走 _try_ai
+# 和 24h cache;底层 _try_ai/缓存代码本身仍可单测(本文件 test_digest_*
+# 和 test_prompt_* 已覆盖)。
 
 
-def test_ai_summary_uses_ai_text_when_call_succeeds(seed_full, client):
-    """_try_ai 返字符串 → summary 用 AI 文本,不走 fallback。"""
-    with patch("src.services.dashboard_ai._try_ai", return_value="AI 测试结论:今日主线半导体。"):
-        body = client.get("/api/dashboard/ai-summary").json()
-    assert body["summary"] == "AI 测试结论:今日主线半导体。"
-    assert body["cached"] is False
-    # 应该写了缓存
-    assert ai_mod._cache is not None
-
-
-# =====================================================================
-# 缓存:第二次调返 cached=true
-# =====================================================================
-
-
-def test_ai_summary_second_call_returns_cached_true(seed_full, client):
-    """第一次调写缓存,第二次直接命中,不再调 _try_ai。"""
-    mock_ai = patch("src.services.dashboard_ai._try_ai", return_value="first call text")
-    with mock_ai as m:
-        body1 = client.get("/api/dashboard/ai-summary").json()
-        body2 = client.get("/api/dashboard/ai-summary").json()
-    assert body1["cached"] is False
-    assert body2["cached"] is True
-    # 文本一致(来自缓存)
-    assert body1["summary"] == body2["summary"] == "first call text"
-    # _try_ai 只被调一次
-    assert m.call_count == 1
-
-
-# =====================================================================
-# 缓存过期 → 重新生成
-# =====================================================================
-
-
-def test_ai_summary_cache_expires_after_ttl(seed_full, client):
-    """手动把 _cache.expires_at 推到过去 → 下一次调用应重算。"""
-    with patch("src.services.dashboard_ai._try_ai", return_value="v1") as m:
-        client.get("/api/dashboard/ai-summary")
-    assert ai_mod._cache is not None
-
-    # 把过期时间推到 1 小时前
-    ai_mod._cache["expires_at"] = datetime.now() - timedelta(hours=1)
-
-    with patch("src.services.dashboard_ai._try_ai", return_value="v2") as m2:
-        body = client.get("/api/dashboard/ai-summary").json()
-    assert body["summary"] == "v2"  # 用了新调用
-    assert body["cached"] is False
-    assert m2.call_count == 1
-
-
-# =====================================================================
-# 缓存:trade_date 变化 → 强制 invalidate
-# =====================================================================
-
-
-def test_ai_summary_cache_invalidates_when_trade_date_advances(
-    db_session, seed_full, client
+def _mk_intraday_row(
+    code: str,
+    name: str,
+    snapshot_time: datetime,
+    main_inflow_wan_x10000: int,
+    change_pct_x10000: int | None = 200,
 ):
-    """5/30 数据缓存了 v1;库里又入了 5/31 数据 → 新 trade_date 应让缓存失效。"""
-    with patch("src.services.dashboard_ai._try_ai", return_value="day1"):
-        client.get("/api/dashboard/ai-summary")
-    assert ai_mod._cache is not None
+    from src.models import IntradaySectorFlow
+    return IntradaySectorFlow(
+        sector_code=code, sector_name=name, sector_type="industry",
+        trade_date=snapshot_time.date(), snapshot_time=snapshot_time,
+        main_inflow_wan_x10000=main_inflow_wan_x10000,
+        change_pct_x10000=change_pct_x10000,
+    )
 
-    # 入 5/31 数据(模拟 cron 15:20 新一天到了)
-    d2 = date(2026, 5, 31)
-    db_session.add(_mk_flow("BK0727", "半导体", d2, 15_000_000_000))
+
+def test_ai_summary_source_intraday_when_has_data(db_session, client):
+    """intraday 有最新 snapshot → source='intraday', cached=False。"""
+    snapshot = datetime(2026, 6, 1, 14, 30)
+    # 55 亿 → wan_yuan_to_int = 55 × 10000 × 10000 = 5_500_000_000
+    db_session.add_all([
+        _mk_intraday_row("BK0001", "电力", snapshot, 5_500_000_000),
+        _mk_intraday_row("BK0002", "半导体", snapshot, -37_900_000_000),
+    ])
     db_session.commit()
 
-    with patch("src.services.dashboard_ai._try_ai", return_value="day2"):
-        body = client.get("/api/dashboard/ai-summary").json()
-    assert body["trade_date"] == "2026-05-31"
-    assert body["summary"] == "day2"
+    body = client.get("/api/dashboard/ai-summary").json()
+    assert body["source"] == "intraday"
     assert body["cached"] is False
+    assert body["data_date"] == "2026-06-01"
+    assert body["data_time"] == "14:30"
+
+
+def test_ai_summary_inflow_top3_from_intraday_industry(db_session, client):
+    """intraday 模式下 inflow_top3 按 main_inflow 降序取前 3。"""
+    snapshot = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday_row("BK0001", "电力", snapshot, 5_560_000_000),    # 55.6 亿
+        _mk_intraday_row("BK0002", "公用事业", snapshot, 5_350_000_000),  # 53.5 亿
+        _mk_intraday_row("BK0003", "火力发电", snapshot, 3_670_000_000),  # 36.7 亿
+        _mk_intraday_row("BK0004", "其他", snapshot, 100_000_000),         # 1 亿,不入 top3
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/ai-summary").json()
+    names = [s["sector_name"] for s in body["inflow_top3"]]
+    assert names == ["电力", "公用事业", "火力发电"]
+    # main_inflow_yi 是亿元 Decimal 字符串
+    from decimal import Decimal
+    assert Decimal(body["inflow_top3"][0]["main_inflow_yi"]) == Decimal("55.6")
+
+
+def test_ai_summary_outflow_top3_only_negative(db_session, client):
+    """outflow_top3 只含 main_inflow < 0 的,按升序(最负的在前)。"""
+    snapshot = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday_row("BK_POS", "电力", snapshot, 5_000_000_000),
+        _mk_intraday_row("BK_NEG1", "半导体", snapshot, -37_930_000_000),  # -379.3 亿
+        _mk_intraday_row("BK_NEG2", "芯片", snapshot, -20_000_000_000),    # -200 亿
+        _mk_intraday_row("BK_NEG3", "机器人", snapshot, -5_000_000_000),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/ai-summary").json()
+    names = [s["sector_name"] for s in body["outflow_top3"]]
+    assert names == ["半导体", "芯片", "机器人"]
+    # 正流入板块不应进 outflow
+    assert "电力" not in names
+
+
+def test_ai_summary_summary_text_intraday_format(db_session, client):
+    """intraday 模式 summary_text 应含 '盘中主力净流入'。"""
+    snapshot = datetime(2026, 6, 1, 14, 30)
+    db_session.add(_mk_intraday_row(
+        "BK0001", "电力", snapshot, 5_560_000_000,  # 55.6 亿
+    ))
+    db_session.commit()
+
+    body = client.get("/api/dashboard/ai-summary").json()
+    assert "盘中主力净流入" in body["summary_text"]
+    assert "电力" in body["summary_text"]
+    # R3 红线检查
+    forbidden = ["买入", "卖出", "加仓", "减仓", "继续持有", "建议", "推荐"]
+    for w in forbidden:
+        assert w not in body["summary_text"]
+
+
+def test_ai_summary_fallback_to_daily_when_intraday_empty(seed_full, client):
+    """intraday 空但 daily 有数据 → source='daily_cached'。"""
+    body = client.get("/api/dashboard/ai-summary").json()
+    assert body["source"] == "daily_cached"
+    # daily 模式下 data_time 为 null,data_date 是 trade_date
+    assert body["data_time"] is None
+    assert body["data_date"] == "2026-05-30"
+    # summary_text 应含"收盘主力净流入"
+    assert "收盘主力" in body["summary_text"]
+
+
+def test_ai_summary_does_not_call_claude_in_new_path(seed_full, client):
+    """关键 R 线:新 PR19 路径不应调用 _try_ai(Claude)。"""
+    with patch("src.services.dashboard_ai._try_ai") as mock_try_ai:
+        body = client.get("/api/dashboard/ai-summary").json()
+    assert mock_try_ai.call_count == 0
+    # 但仍能拿到合理输出
+    assert body["source"] == "daily_cached"
+    assert body["summary_text"]
+
+
+def test_ai_summary_holding_stats_present(seed_full, client):
+    """holding_stats 应是 dict(可能为空,可能含 bullish/bearish/neutral 等)。"""
+    body = client.get("/api/dashboard/ai-summary").json()
+    assert isinstance(body["holding_stats"], dict)
+    # seed_full 有 2 只持仓:F_SEMI bullish + F_PV bearish
+    assert body["holding_stats"].get("bullish", 0) >= 0
+
+
+def test_ai_summary_intraday_ignores_concept_sectors(db_session, client):
+    """concept 板块 _x10000 即便巨大也不进 intraday inflow_top3(只 industry)。"""
+    snapshot = datetime(2026, 6, 1, 14, 30)
+    db_session.add_all([
+        _mk_intraday_row("BK_IND", "电力", snapshot, 1_000_000_000),
+    ])
+    # 手动加一个 concept 巨大值
+    from src.models import IntradaySectorFlow
+    db_session.add(IntradaySectorFlow(
+        sector_code="BK_CON", sector_name="AI算力", sector_type="concept",
+        trade_date=snapshot.date(), snapshot_time=snapshot,
+        main_inflow_wan_x10000=99_999_999_999_999,
+        change_pct_x10000=500,
+    ))
+    db_session.commit()
+
+    body = client.get("/api/dashboard/ai-summary").json()
+    names = [s["sector_name"] for s in body["inflow_top3"]]
+    assert "电力" in names
+    assert "AI算力" not in names  # concept 被排除
+
+
+def test_ai_summary_legacy_fields_still_present(db_session, client):
+    """旧字段 trade_date/summary/generated_at/cached 必须仍在 response 里
+    (前端可能还在用)。"""
+    body = client.get("/api/dashboard/ai-summary").json()
+    assert "trade_date" in body
+    assert "summary" in body
+    assert "generated_at" in body
+    assert "cached" in body
 
 
 # =====================================================================

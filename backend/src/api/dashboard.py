@@ -12,8 +12,10 @@ R 红线兼容:
 - GET /api/dashboard/ai-summary
 """
 
+import logging
+from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -31,17 +33,21 @@ from src.schemas.dashboard import (
     MarketSnapshotResponse,
     MatchedSector,
     RadarFundItem,
+    SectorBriefItem,
     SectorFlowResponse,
     TopFundResponse,
     TopFundsResponse,
     TopSectorsResponse,
 )
-from src.services.dashboard_ai import get_or_build_summary
+from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
-from src.services.data_fetcher import DEFAULT_INDICES
+from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
 from src.services.radar import build_intraday_radar
+from src.utils.date_helper import cn_now
 from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -62,36 +68,131 @@ def _to_index_response(row: MarketIndexDaily) -> MarketIndexResponse:
     )
 
 
+# =====================================================================
+# PR19 — 市场温度扩展:在 DEFAULT_INDICES (4) 基础上加 4 个核心指数
+# =====================================================================
+# DEFAULT_INDICES 由 scheduler.daily_fetch 持续采集 → market_index_daily;
+# 下面 4 个是新增,scheduler 没动,所以 DB 里没数据 → 走 sina 即时拉 + 5min
+# 内存缓存,任一失败不影响其它指数。R 线:不改 data_fetcher / scheduler。
+EXTRA_DASHBOARD_INDICES: list[tuple[str, str]] = [
+    ("sh000688", "科创50"),
+    ("sh000905", "中证500"),
+    ("sh000852", "中证1000"),
+    ("bj899050", "北证50"),
+]
+
+# 完整显示顺序(DB 4 + 即时 4)— 决定前端渲染先后
+DASHBOARD_DISPLAY_INDICES: list[tuple[str, str]] = (
+    list(DEFAULT_INDICES) + EXTRA_DASHBOARD_INDICES
+)
+
+# 即时拉的内存 TTL 缓存:5 min。首请求扛 4 个 sina HTTP,后续命中缓存。
+_EXTRA_INDEX_CACHE_TTL = timedelta(minutes=5)
+_extra_index_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
+
+
+def _clear_extra_index_cache_for_test() -> None:
+    """供测试用,清空 extra 指数缓存。"""
+    _extra_index_cache.clear()
+
+
+def _fetch_extra_index_with_cache(
+    code: str, name: str
+) -> dict[str, Any] | None:
+    """5 min TTL 缓存 + 即时 sina 拉。任何异常 → None,调用方跳过该指数。"""
+    now = cn_now()
+    cached = _extra_index_cache.get(code)
+    if cached is not None:
+        ts, data = cached
+        if (now - ts) < _EXTRA_INDEX_CACHE_TTL:
+            return data
+    try:
+        rows = fetch_market_index(code)
+        if not rows:
+            return None
+        row = rows[0]
+        data = {
+            "index_code": code,
+            "index_name": name,
+            "trade_date": row["trade_date"],
+            "close_x10000": row["close_x10000"],
+            "change_pct_x10000": row["change_pct_x10000"],
+            "turnover_wan_x10000": row.get("turnover_wan_x10000"),
+        }
+        _extra_index_cache[code] = (now, data)
+        return data
+    except Exception as e:
+        logger.warning(
+            "extra index %s/%s fetch failed: %s: %s",
+            code, name, type(e).__name__, e,
+        )
+        return None
+
+
+def _to_index_response_from_dict(d: dict[str, Any]) -> MarketIndexResponse:
+    return MarketIndexResponse(
+        index_code=d["index_code"],
+        index_name=d["index_name"],
+        trade_date=d["trade_date"],
+        close=int_to_nav(d["close_x10000"]),
+        change_pct=int_to_pct(d["change_pct_x10000"]),
+        turnover_wan=(
+            int_to_wan_yuan(d["turnover_wan_x10000"])
+            if d.get("turnover_wan_x10000") is not None
+            else None
+        ),
+    )
+
+
 @router.get("/market", response_model=MarketSnapshotResponse)
 def get_market_snapshot(db: Session = Depends(get_session)) -> MarketSnapshotResponse:
-    """市场温度:返回最新交易日的 4 大指数。
+    """市场温度:返回最新交易日的核心 8 个指数(PR19 扩展)。
 
-    - 取整张 market_index_daily 里最大的 trade_date
-    - 该日的所有指数,按 DEFAULT_INDICES 顺序排列(上证/深成/创业板/沪深300)
-    - 不在 DEFAULT_INDICES 里的指数(理论上不会有)排到末尾
-    - 空库 → {"trade_date": null, "indices": []} + HTTP 200
+    - DEFAULT_INDICES 的 4 个 → 从 market_index_daily 读最新 trade_date
+    - EXTRA_DASHBOARD_INDICES 的 4 个 → 即时 sina + 5min 内存缓存,
+      失败不影响其它指数
+    - 按 DASHBOARD_DISPLAY_INDICES 顺序输出
+    - 顶层 trade_date 取所有出现指数中最大的(DB 和 extra 都可能贡献)
+    - 全空 → {"trade_date": null, "indices": []} + HTTP 200
     """
-    latest_date = db.scalar(select(MarketIndexDaily.trade_date)
-                            .order_by(MarketIndexDaily.trade_date.desc())
-                            .limit(1))
-    if latest_date is None:
+    db_indices: list[MarketIndexResponse] = []
+    latest_db_date = db.scalar(
+        select(MarketIndexDaily.trade_date)
+        .order_by(MarketIndexDaily.trade_date.desc())
+        .limit(1)
+    )
+    if latest_db_date is not None:
+        db_rows = list(db.scalars(
+            select(MarketIndexDaily).where(
+                MarketIndexDaily.trade_date == latest_db_date
+            )
+        ))
+        db_indices = [_to_index_response(r) for r in db_rows]
+
+    extra_indices: list[MarketIndexResponse] = []
+    for code, name in EXTRA_DASHBOARD_INDICES:
+        d = _fetch_extra_index_with_cache(code, name)
+        if d is not None:
+            extra_indices.append(_to_index_response_from_dict(d))
+
+    all_indices = db_indices + extra_indices
+    if not all_indices:
         return MarketSnapshotResponse(trade_date=None, indices=[])
 
-    rows = db.scalars(
-        select(MarketIndexDaily).where(MarketIndexDaily.trade_date == latest_date)
-    ).all()
-
-    # 按 DEFAULT_INDICES 顺序排;未知 index_code 排到末尾(按 code 字母序兜底)
-    order_map = {code: i for i, (code, _) in enumerate(DEFAULT_INDICES)}
-    unknown_offset = len(DEFAULT_INDICES)
+    # 按 DASHBOARD_DISPLAY_INDICES 排;未知 code 排到末尾
+    order_map = {code: i for i, (code, _) in enumerate(DASHBOARD_DISPLAY_INDICES)}
+    unknown_offset = len(DASHBOARD_DISPLAY_INDICES)
     rows_sorted = sorted(
-        rows,
+        all_indices,
         key=lambda r: (order_map.get(r.index_code, unknown_offset), r.index_code),
     )
 
+    # 顶层 trade_date:用 DB 那批的(更可靠);全无 DB 时取 extra 最大
+    trade_date_val = latest_db_date or max(r.trade_date for r in extra_indices)
+
     return MarketSnapshotResponse(
-        trade_date=latest_date,
-        indices=[_to_index_response(r) for r in rows_sorted],
+        trade_date=trade_date_val,
+        indices=rows_sorted,
     )
 
 
@@ -403,25 +504,42 @@ def get_top_funds(
 
 
 # =====================================================================
-# AI 一句话结论(24h TTL 缓存)
+# AI 结论(PR19 — 结构化,intraday 优先 + daily fallback,纯规则生成)
 # =====================================================================
+
+
+def _brief_to_response(d: dict[str, Any]) -> SectorBriefItem:
+    return SectorBriefItem(
+        sector_name=d["sector_name"],
+        main_inflow_yi=d["main_inflow_yi"],
+        change_pct=d["change_pct"],
+    )
 
 
 @router.get("/ai-summary", response_model=AISummaryResponse)
 def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
-    """AI 一句话结论(Dashboard 首页"AI 结论"区数据源)。
+    """AI 结论(Dashboard 首页 "AI 结论" 区数据源)。
 
-    走 services/dashboard_ai.get_or_build_summary,该服务负责:
-    - 24h 模块级 TTL 缓存
-    - trade_date 变化时自动 invalidate(15:20 cron 新数据到 → 下次调用重算)
-    - ANTHROPIC_API_KEY 缺失或 Anthropic 调用失败 → graceful fallback
-      (不报错;HTTP 仍 200;fallback 基于真实 digest 渲染,非空话)
-
-    返回:
-    - trade_date: 最新有 sector_flow 数据的日期;空库 → null
-    - summary  : 一句话结论
-    - generated_at: 该 summary 生成时刻
-    - cached   : true=命中缓存 / false=本次新生成
+    PR19 重构:
+    - 优先用 intraday_sector_flow 最新 snapshot 生成结构化短摘要(source=intraday)
+    - 若 intraday 库为空 → fallback 到 sector_flow_daily 最新交易日
+      (source=daily_cached,但本路径**不调** Claude API,规则化生成)
+    - cached 字段:仅在 source='daily_cached' 且命中旧 24h cache 时 true;
+      PR19 新路径恒 false
+    - 旧字段 trade_date/summary/generated_at/cached 保留作向后兼容
     """
-    raw = get_or_build_summary(db)
-    return AISummaryResponse(**raw)
+    raw = build_extended_ai_summary(db)
+    return AISummaryResponse(
+        source=raw["source"],
+        summary_text=raw["summary_text"],
+        inflow_top3=[_brief_to_response(d) for d in raw["inflow_top3"]],
+        outflow_top3=[_brief_to_response(d) for d in raw["outflow_top3"]],
+        holding_stats=raw["holding_stats"],
+        data_date=raw["data_date"],
+        data_time=raw["data_time"],
+        cached=raw["cached"],
+        # 旧字段
+        trade_date=raw["trade_date"],
+        summary=raw["summary"],
+        generated_at=raw["generated_at"],
+    )

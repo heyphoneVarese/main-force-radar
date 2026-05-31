@@ -319,3 +319,196 @@ def get_or_build_summary(session: Session) -> dict[str, Any]:
     }
     _write_cache(value, now)
     return {**value, "cached": False}
+
+
+# =====================================================================
+# PR19 — 扩展 AI 结论(intraday 优先 → daily fallback,纯规则生成)
+# =====================================================================
+#
+# R 红线:
+# - 不调用任何 AI / Claude API(_try_ai 仅在 get_or_build_summary 旧路径里;
+#   本扩展不走它)
+# - 不输出 buy/sell/long/short/hold/加仓/减仓/继续持有/建议/推荐 等词
+# - 不影响 intraday_fetcher / scheduler / data_fetcher / radar / DB schema
+# =====================================================================
+
+from src.models import IntradaySectorFlow  # noqa: E402  (放下面保持上面 import 区不乱)
+
+
+def _holding_stats(session: Session) -> dict[str, int]:
+    """signal_type → count。复用 holdings_summary,签名固定供 PR19 用。"""
+    summary = build_holdings_summary(session)
+    dist: dict[str, int] = {}
+    for h in summary["holdings"]:
+        dist[h["signal_type"]] = dist.get(h["signal_type"], 0) + 1
+    return dist
+
+
+def _yi_decimal(wan_x10000: int) -> Any:
+    """_x10000 → 亿(Decimal,保留 1 位)。"""
+    from decimal import Decimal
+    return (Decimal(wan_x10000) / Decimal(100_000_000)).quantize(Decimal("0.1"))
+
+
+def _pct_decimal(pct_x10000: int | None) -> Any:
+    """_x10000 fraction → percent Decimal(2 位);None 透传。"""
+    if pct_x10000 is None:
+        return None
+    from decimal import Decimal
+    return (Decimal(pct_x10000) / Decimal(100)).quantize(Decimal("0.01"))
+
+
+def _row_to_brief(row: Any) -> dict[str, Any]:
+    """通用 ORM 行 → brief dict(API 层再 Pydantic 化)。"""
+    return {
+        "sector_name": row.sector_name,
+        "main_inflow_yi": _yi_decimal(row.main_inflow_wan_x10000),
+        "change_pct": _pct_decimal(row.change_pct_x10000),
+    }
+
+
+def _fmt_yi_signed(wan_x10000: int) -> str:
+    """规则文案专用:+120.0亿 / -18.0亿 / 0.0亿(0 不带符号)。"""
+    yi = wan_x10000 / 100_000_000
+    sign = "+" if yi > 0 else ""
+    return f"{sign}{yi:.1f}亿"
+
+
+def _build_summary_text(
+    inflow_rows: list[Any],
+    outflow_rows: list[Any],
+    *,
+    is_intraday: bool,
+) -> str:
+    """规则生成的 summary_text。R3:不含投资建议/涨跌预测。"""
+    prefix = "盘中主力" if is_intraday else "收盘主力"
+    parts: list[str] = []
+    if inflow_rows:
+        s = "、".join(
+            f"{r.sector_name} {_fmt_yi_signed(r.main_inflow_wan_x10000)}"
+            for r in inflow_rows
+        )
+        parts.append(f"{prefix}净流入 {s}")
+    if outflow_rows:
+        s = "、".join(
+            f"{r.sector_name} {_fmt_yi_signed(r.main_inflow_wan_x10000)}"
+            for r in outflow_rows
+        )
+        parts.append(f"净流出 {s}")
+    if not parts:
+        return f"{prefix}暂无明显方向。"
+    return "。".join(parts) + "。"
+
+
+def _build_intraday_summary(session: Session) -> dict[str, Any] | None:
+    """intraday_sector_flow 最新 snapshot → 结构化摘要。空库 → None,
+    上层 fallback。"""
+    latest_snapshot = session.scalar(
+        select(IntradaySectorFlow.snapshot_time)
+        .order_by(IntradaySectorFlow.snapshot_time.desc())
+        .limit(1)
+    )
+    if latest_snapshot is None:
+        return None
+
+    rows = list(session.scalars(
+        select(IntradaySectorFlow)
+        .where(IntradaySectorFlow.snapshot_time == latest_snapshot)
+        .where(IntradaySectorFlow.sector_type == "industry")
+    ))
+    if not rows:
+        return None
+
+    inflow_top3 = sorted(rows, key=lambda r: -r.main_inflow_wan_x10000)[:3]
+    outflow_top3 = [
+        r for r in sorted(rows, key=lambda r: r.main_inflow_wan_x10000)
+        if r.main_inflow_wan_x10000 < 0
+    ][:3]
+
+    summary_text = _build_summary_text(
+        inflow_top3, outflow_top3, is_intraday=True
+    )
+
+    now = cn_now()
+    return {
+        "source": "intraday",
+        "summary_text": summary_text,
+        "inflow_top3": [_row_to_brief(r) for r in inflow_top3],
+        "outflow_top3": [_row_to_brief(r) for r in outflow_top3],
+        "holding_stats": _holding_stats(session),
+        "data_date": latest_snapshot.date(),
+        "data_time": latest_snapshot.strftime("%H:%M"),
+        "cached": False,
+        # 旧字段兼容
+        "trade_date": latest_snapshot.date(),
+        "summary": summary_text,
+        "generated_at": now,
+    }
+
+
+def _build_daily_fallback(session: Session) -> dict[str, Any]:
+    """sector_flow_daily 最新交易日 → 结构化摘要。空时友好空态。
+
+    规则化,不调 Claude。cached 字段在本 PR19 路径恒为 False
+    (旧 get_or_build_summary 那条线还在,但 API 不再用)。
+    """
+    latest_date = session.scalar(
+        select(SectorFlowDaily.trade_date)
+        .order_by(SectorFlowDaily.trade_date.desc())
+        .limit(1)
+    )
+    now = cn_now()
+
+    if latest_date is None:
+        # 真·两边都空:友好空态
+        return {
+            "source": "daily_cached",
+            "summary_text": "今日尚无数据,等待 cron 15:20 采集完成。",
+            "inflow_top3": [],
+            "outflow_top3": [],
+            "holding_stats": _holding_stats(session),
+            "data_date": None,
+            "data_time": None,
+            "cached": False,
+            "trade_date": None,
+            "summary": "今日尚无数据,等待 cron 15:20 采集完成。",
+            "generated_at": now,
+        }
+
+    rows = list(session.scalars(
+        select(SectorFlowDaily)
+        .where(SectorFlowDaily.trade_date == latest_date)
+        .where(SectorFlowDaily.sector_type == "industry")
+    ))
+
+    inflow_top3 = sorted(rows, key=lambda r: -r.main_inflow_wan_x10000)[:3]
+    outflow_top3 = [
+        r for r in sorted(rows, key=lambda r: r.main_inflow_wan_x10000)
+        if r.main_inflow_wan_x10000 < 0
+    ][:3]
+
+    summary_text = _build_summary_text(
+        inflow_top3, outflow_top3, is_intraday=False
+    )
+
+    return {
+        "source": "daily_cached",
+        "summary_text": summary_text,
+        "inflow_top3": [_row_to_brief(r) for r in inflow_top3],
+        "outflow_top3": [_row_to_brief(r) for r in outflow_top3],
+        "holding_stats": _holding_stats(session),
+        "data_date": latest_date,
+        "data_time": None,
+        "cached": False,
+        "trade_date": latest_date,
+        "summary": summary_text,
+        "generated_at": now,
+    }
+
+
+def build_extended_ai_summary(session: Session) -> dict[str, Any]:
+    """PR19 顶层入口:intraday 优先,fallback 到 daily 规则化摘要。"""
+    intraday = _build_intraday_summary(session)
+    if intraday is not None:
+        return intraday
+    return _build_daily_fallback(session)

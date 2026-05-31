@@ -5,9 +5,11 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
+from src.api import dashboard as dashboard_api
 from src.models import (
     Fund,
     Holding,
@@ -16,6 +18,18 @@ from src.models import (
     SectorFlowDaily,
     Signal,
 )
+
+
+# PR19:默认 disable 4 个 extra 指数的即时拉取(它们走 sina 网络,测试里
+# 既不可控也不该跑)。需要测 extras 的用例自己 explicit patch 上去。
+@pytest.fixture(autouse=True)
+def _disable_extra_index_fetch():
+    dashboard_api._clear_extra_index_cache_for_test()
+    with patch.object(
+        dashboard_api, "_fetch_extra_index_with_cache", return_value=None
+    ):
+        yield
+    dashboard_api._clear_extra_index_cache_for_test()
 
 
 def _mk_index(
@@ -163,6 +177,119 @@ def test_market_endpoint_unknown_index_code_sorted_to_tail(db_session, client):
     codes = [r["index_code"] for r in body["indices"]]
     # sh000001 在 DEFAULT_INDICES → 前;sh000016 不在 → 后
     assert codes == ["sh000001", "sh000016"]
+
+
+# =====================================================================
+# PR19 — market 8 指数扩展
+# =====================================================================
+
+
+def test_market_endpoint_includes_extras_when_fetcher_returns_data(
+    db_session, client
+):
+    """DB 有 DEFAULT_INDICES 的 4 条 + extra fetcher 返 4 条 → 8 个全出。
+    顺序按 DASHBOARD_DISPLAY_INDICES。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_index("sh000001", "上证指数", d, 31205000, 66),
+        _mk_index("sz399001", "深证成指", d, 10120000, 41),
+        _mk_index("sz399006", "创业板指", d, 22035000, -23),
+        _mk_index("sh000300", "沪深300", d, 41129000, 87),
+    ])
+    db_session.commit()
+
+    def _extra_stub(code, name):
+        return {
+            "index_code": code,
+            "index_name": name,
+            "trade_date": d,
+            "close_x10000": 50000000,
+            "change_pct_x10000": 100,
+            "turnover_wan_x10000": None,
+        }
+
+    with patch.object(
+        dashboard_api, "_fetch_extra_index_with_cache",
+        side_effect=_extra_stub,
+    ):
+        body = client.get("/api/dashboard/market").json()
+
+    codes = [r["index_code"] for r in body["indices"]]
+    assert codes == [
+        "sh000001", "sz399001", "sz399006", "sh000300",
+        "sh000688", "sh000905", "sh000852", "bj899050",
+    ]
+
+
+def test_market_endpoint_extra_failures_dont_break_response(
+    db_session, client
+):
+    """4 个 extra 全失败 → 仍能正常返 DB 里 4 个,HTTP 200。
+    autouse fixture 默认 disable extras,刚好模拟这种 case。"""
+    d = date(2026, 5, 30)
+    db_session.add(_mk_index("sh000001", "上证指数", d, 31205000, 66))
+    db_session.commit()
+
+    body = client.get("/api/dashboard/market").json()
+    assert body["trade_date"] == "2026-05-30"
+    codes = [r["index_code"] for r in body["indices"]]
+    assert codes == ["sh000001"]
+
+
+def test_market_endpoint_one_extra_failure_others_ok(db_session, client):
+    """3 个 extra 成,1 个失败 → 7 个出(4 DB + 3 extra)。"""
+    d = date(2026, 5, 30)
+    db_session.add(_mk_index("sh000001", "上证指数", d, 31205000, 66))
+    db_session.commit()
+
+    def _extra_stub(code, name):
+        # 北证50 失败
+        if code == "bj899050":
+            return None
+        return {
+            "index_code": code,
+            "index_name": name,
+            "trade_date": d,
+            "close_x10000": 50000000,
+            "change_pct_x10000": 100,
+            "turnover_wan_x10000": None,
+        }
+
+    with patch.object(
+        dashboard_api, "_fetch_extra_index_with_cache",
+        side_effect=_extra_stub,
+    ):
+        body = client.get("/api/dashboard/market").json()
+
+    codes = [r["index_code"] for r in body["indices"]]
+    # 1 个 DB + 3 个成功 extra(科创50/中证500/中证1000),北证50 缺
+    assert codes == ["sh000001", "sh000688", "sh000905", "sh000852"]
+    assert "bj899050" not in codes
+
+
+def test_market_endpoint_only_extras_when_db_empty(db_session, client):
+    """DB 完全空 + extra 全成 → 仍能返 4 个 extra,trade_date 来自 extra。"""
+    extra_date = date(2026, 6, 1)
+
+    def _extra_stub(code, name):
+        return {
+            "index_code": code,
+            "index_name": name,
+            "trade_date": extra_date,
+            "close_x10000": 50000000,
+            "change_pct_x10000": 100,
+            "turnover_wan_x10000": None,
+        }
+
+    with patch.object(
+        dashboard_api, "_fetch_extra_index_with_cache",
+        side_effect=_extra_stub,
+    ):
+        body = client.get("/api/dashboard/market").json()
+
+    assert body["trade_date"] == "2026-06-01"
+    codes = [r["index_code"] for r in body["indices"]]
+    assert codes == ["sh000688", "sh000905", "sh000852", "bj899050"]
 
 
 # =====================================================================

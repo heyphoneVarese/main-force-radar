@@ -263,22 +263,70 @@ class DashboardRadarResponse(BaseModel):
     )
 
 
-class AISummaryResponse(BaseModel):
-    """AI 一句话结论(24h TTL 缓存)。
+class SectorBriefItem(BaseModel):
+    """AI 摘要里的单条板块简表(PR19)。
 
-    AI 不可用(无 key / 调用失败)时 graceful fallback,基于真实 digest
-    数据规则化输出,不返回空话,HTTP 仍 200。
+    main_inflow_yi:亿元(已 / 10000),正值流入,负值流出。
+    change_pct:百分数(2.10 = 2.10%);跟 sectors/top 的 fraction 形式不同 —
+    跟 radar / 雷达 spec 对齐(展示口径)。
     """
 
+    sector_name: str
+    main_inflow_yi: Decimal
+    change_pct: Decimal | None = None
+
+
+class AISummaryResponse(BaseModel):
+    """AI 一句话结论(PR15 daily 缓存 + PR19 intraday 结构化)。
+
+    优先 source='intraday'(读最新 intraday_sector_flow snapshot,
+    规则生成,不调用任何 AI API);intraday 库空时 fallback 到
+    source='daily_cached'(读 sector_flow_daily 最新交易日,同样规则化)。
+
+    R3 兼容:全部规则生成,无 buy/sell/long/short/hold/加仓/减仓/继续持有/
+    建议/推荐 等词;summary_text 只描述客观流向 + 持仓信号分布。
+
+    旧字段(trade_date / summary / generated_at / cached)保留作向后兼容。
+    """
+
+    # ===== PR19 新增字段 =====
+    source: str = Field(
+        description="'intraday' | 'daily_cached'"
+    )
+    summary_text: str = Field(
+        description="结构化短结论(PR19 渲染主体);跟旧 summary 字段语义近似"
+    )
+    inflow_top3: list[SectorBriefItem] = Field(
+        default_factory=list,
+        description="主力净流入 Top 3(industry,降序);intraday 优先,daily fallback"
+    )
+    outflow_top3: list[SectorBriefItem] = Field(
+        default_factory=list,
+        description="主力净流出 Top 3(industry,升序,只含 < 0)"
+    )
+    holding_stats: dict[str, int] = Field(
+        default_factory=dict,
+        description="signal_type → 持仓基金数(键:bullish/bearish/warning/neutral/not_applicable)"
+    )
+    data_date: date | None = Field(
+        default=None,
+        description="数据所属交易日(intraday=snapshot 当日;daily=sector_flow 最新交易日)"
+    )
+    data_time: str | None = Field(
+        default=None,
+        description="intraday snapshot 'HH:MM';daily_cached 时为 null"
+    )
+
+    # ===== 旧字段(向后兼容)=====
     trade_date: date | None = Field(
-        description="最新交易日(sector_flow_daily 最大日期);空库 → null"
+        description="(deprecated 改用 data_date)最新交易日;空 → null"
     )
     summary: str = Field(
-        description="一句话结论(AI 或 fallback);R3:不含投资建议/涨跌预测"
+        description="(deprecated 改用 summary_text)一句话结论"
     )
     generated_at: datetime = Field(
         description="本次返回内容的生成时刻(Asia/Shanghai)"
     )
     cached: bool = Field(
-        description="true=命中 24h 缓存;false=本次新生成(AI 调用或 fallback)"
+        description="只在 source='daily_cached' 且命中 24h 缓存时为 true;intraday 路径恒为 false"
     )

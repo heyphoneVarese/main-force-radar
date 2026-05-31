@@ -130,10 +130,26 @@ export interface TopFunds {
   funds: TopFund[]
 }
 
+export interface SectorBriefItem {
+  sector_name: string
+  main_inflow_yi: string             // Decimal 亿元
+  change_pct: string | null          // Decimal 百分数
+}
+
 export interface AISummary {
+  // PR19 新字段
+  source: 'intraday' | 'daily_cached'
+  summary_text: string
+  inflow_top3: SectorBriefItem[]
+  outflow_top3: SectorBriefItem[]
+  holding_stats: Record<string, number>   // signal_type → count
+  data_date: string | null
+  data_time: string | null           // "HH:MM" intraday only
+
+  // 旧字段(向后兼容,新 UI 不用)
   trade_date: string | null
   summary: string
-  generated_at: string               // ISO datetime
+  generated_at: string
   cached: boolean
 }
 
