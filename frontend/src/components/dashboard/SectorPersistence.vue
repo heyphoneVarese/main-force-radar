@@ -50,6 +50,63 @@ function streakLabel(item: SectorPersistenceItem): {
   }
   return { text: '今日中性 / 无连续', cls: 'text-gray-500' }
 }
+
+// PR21:第三行窗口统计(5/10/20 日)。
+// spec:
+//   今日 inflow > 0  → 优先显示"流入X / Top20 Y"
+//   今日 outflow < 0 → 优先显示"流出X / Top20 Y"
+//   今日 = 0 (持平) → 同时显示"流入X / 流出Y / Top20 Z"
+// 一行三段(5/10/20 日各一段)用 · 分隔;长了 flex wrap 自适应。
+type WindowDirection = 'inflow' | 'outflow' | 'neutral'
+
+function directionForItem(item: SectorPersistenceItem): WindowDirection {
+  const n = Number(item.main_inflow_yi)
+  if (n > 0) return 'inflow'
+  if (n < 0) return 'outflow'
+  return 'neutral'
+}
+
+interface WindowSegment {
+  label: string       // "近5日"
+  inflow: number
+  outflow: number
+  top20: number
+}
+
+function windowSegments(item: SectorPersistenceItem): WindowSegment[] {
+  return [
+    {
+      label: '近5日',
+      inflow: item.last_5_inflow_days,
+      outflow: item.last_5_outflow_days,
+      top20: item.last_5_top20_days,
+    },
+    {
+      label: '近10日',
+      inflow: item.last_10_inflow_days,
+      outflow: item.last_10_outflow_days,
+      top20: item.last_10_top20_days,
+    },
+    {
+      label: '近20日',
+      inflow: item.last_20_inflow_days,
+      outflow: item.last_20_outflow_days,
+      top20: item.last_20_top20_days,
+    },
+  ]
+}
+
+function segmentText(seg: WindowSegment, dir: WindowDirection): string {
+  // 简化字符串:流入X 或 流出X 或 流入X/流出Y
+  if (dir === 'inflow') {
+    return `${seg.label} 流入${seg.inflow} / Top20 ${seg.top20}`
+  }
+  if (dir === 'outflow') {
+    return `${seg.label} 流出${seg.outflow} / Top20 ${seg.top20}`
+  }
+  // neutral:同时显示双向
+  return `${seg.label} 流入${seg.inflow}/流出${seg.outflow} / Top20 ${seg.top20}`
+}
 </script>
 
 <template>
@@ -107,7 +164,7 @@ function streakLabel(item: SectorPersistenceItem): {
                 </span>
               </div>
 
-              <!-- 下行:6 个事实字段(连续 inflow/outflow 二选一 + 连续 top20 + last 20)-->
+              <!-- 第 2 行:连续 inflow/outflow + 连续 Top20 -->
               <div
                 class="flex flex-wrap gap-x-3 gap-y-0.5 text-xs tabular-nums mt-1 pl-9"
               >
@@ -118,10 +175,22 @@ function streakLabel(item: SectorPersistenceItem): {
                 <span class="text-gray-600">
                   连续Top20 {{ item.continuous_top20_days }} 天
                 </span>
-                <span class="text-gray-300">·</span>
-                <span class="text-gray-500">
-                  近20日Top20 {{ item.last_20_top20_days }} 次
-                </span>
+              </div>
+
+              <!-- 第 3 行(PR21):5/10/20 日窗口统计 -->
+              <div
+                class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-gray-500 tabular-nums mt-1 pl-9"
+              >
+                <template
+                  v-for="(seg, idx) in windowSegments(item)"
+                  :key="seg.label"
+                >
+                  <span
+                    v-if="idx > 0"
+                    class="text-gray-300"
+                  >·</span>
+                  <span>{{ segmentText(seg, directionForItem(item)) }}</span>
+                </template>
               </div>
             </li>
           </ul>

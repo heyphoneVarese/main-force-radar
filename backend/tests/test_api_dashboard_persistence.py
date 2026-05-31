@@ -426,3 +426,250 @@ def test_persistence_all_six_fact_fields_present(
     }
     for it in body["items"]:
         assert required_fields.issubset(it.keys())
+
+
+# =====================================================================
+# PR21 — 5 / 10 / 20 日窗口扩展
+# =====================================================================
+
+
+@pytest.fixture
+def seed_history_25_days(db_session):
+    """造 25 个连续交易日(d-24..d0)的数据。BK_X 有不同模式:
+    - 全 25 天都 in 1 亿 → 25 天连续 inflow
+    构造另一只 BK_Y 让 top20 视图非平凡:
+    - 25 个其它板块每天都更强 → BK_X / BK_Y 大部分天不在 top20。
+    BK_X 历史前 20 天(d-24..d-5)inflow 高,
+    后 5 天(d-4..d0)inflow 也高 →  → BK_X 全在 top20。
+
+    简化:只造 BK_X(25 天 inflow,top20 全在)+ BK_Y(25 天 outflow)。
+    其它板块不造,top20 < 20 个但 BK_X/Y 仍在。
+    """
+    def Y(b):
+        return b * 100_000_000
+
+    base = date(2026, 5, 1)
+    for i in range(25):
+        d = date(2026, 5, 1 + i)
+        # BK_X: 25 天连续 inflow
+        db_session.add(_mk_flow("BK_X", "X", d, Y(10)))
+        # BK_Y: 25 天连续 outflow
+        db_session.add(_mk_flow("BK_Y", "Y", d, Y(-5)))
+    db_session.commit()
+    return date(2026, 5, 25)  # 最新日
+
+
+def test_persistence_last_5_inflow_days(client, seed_history_25_days):
+    """BK_X 25 天连续 inflow → last_5 = 5。"""
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_5_inflow_days"] == 5
+    assert x["last_5_outflow_days"] == 0
+
+
+def test_persistence_last_10_inflow_days(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_10_inflow_days"] == 10
+    assert x["last_10_outflow_days"] == 0
+
+
+def test_persistence_last_20_inflow_days_compat(client, seed_history_25_days):
+    """PR20 兼容性 — last_20_inflow_days 仍然只算 20(不是 25)。"""
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_20_inflow_days"] == 20
+
+
+def test_persistence_last_5_outflow_days(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    y = next(it for it in body["items"] if it["sector_code"] == "BK_Y")
+    assert y["last_5_outflow_days"] == 5
+    assert y["last_5_inflow_days"] == 0
+
+
+def test_persistence_last_10_outflow_days(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    y = next(it for it in body["items"] if it["sector_code"] == "BK_Y")
+    assert y["last_10_outflow_days"] == 10
+
+
+def test_persistence_last_20_outflow_days_compat(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    y = next(it for it in body["items"] if it["sector_code"] == "BK_Y")
+    assert y["last_20_outflow_days"] == 20
+
+
+def test_persistence_last_5_top20_days(client, seed_history_25_days):
+    """只有 2 个板块 → 全在 top20(top20 容量 20) → last_5 = 5。"""
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_5_top20_days"] == 5
+
+
+def test_persistence_last_10_top20_days(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_10_top20_days"] == 10
+
+
+def test_persistence_last_20_top20_days_compat(client, seed_history_25_days):
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    x = next(it for it in body["items"] if it["sector_code"] == "BK_X")
+    assert x["last_20_top20_days"] == 20
+
+
+# =====================================================================
+# 历史不足窗口大小
+# =====================================================================
+
+
+def test_persistence_short_history_3_days_5d_caps_to_3(db_session, client):
+    """只有 3 个交易日历史 → last_5_inflow_days 最多 3。"""
+    def Y(b):
+        return b * 100_000_000
+
+    db_session.add_all([
+        _mk_flow("BK_SHORT", "短", date(2026, 5, 27), Y(10)),
+        _mk_flow("BK_SHORT", "短", date(2026, 5, 28), Y(10)),
+        _mk_flow("BK_SHORT", "短", date(2026, 5, 29), Y(10)),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    item = body["items"][0]
+    assert item["last_5_inflow_days"] == 3   # 不是 5
+    assert item["last_10_inflow_days"] == 3  # 不是 10
+    assert item["last_20_inflow_days"] == 3  # 不是 20
+    assert item["last_5_top20_days"] == 3
+    assert item["last_10_top20_days"] == 3
+
+
+# =====================================================================
+# sector 某日缺失不计入
+# =====================================================================
+
+
+def test_persistence_missing_day_not_counted_in_windows(db_session, client):
+    """BK_GAP 在 d3 缺记录 → last_5_inflow_days 只数实际存在的日。"""
+    def Y(b):
+        return b * 100_000_000
+
+    d1 = date(2026, 5, 25)
+    d2 = date(2026, 5, 26)
+    d3 = date(2026, 5, 27)  # GAP 缺
+    d4 = date(2026, 5, 28)
+    d5 = date(2026, 5, 29)
+
+    db_session.add_all([
+        _mk_flow("BK_GAP", "缺日", d1, Y(10)),
+        _mk_flow("BK_GAP", "缺日", d2, Y(10)),
+        # d3 BK_GAP 缺
+        _mk_flow("BK_GAP", "缺日", d4, Y(10)),
+        _mk_flow("BK_GAP", "缺日", d5, Y(10)),
+        # 其它板块占住 d3 让 all_dates 含 d3
+        _mk_flow("BK_FILL", "填充", d3, Y(5)),
+        _mk_flow("BK_FILL", "填充", d5, Y(5)),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    gap = next(it for it in body["items"] if it["sector_code"] == "BK_GAP")
+    # last_5 看最近 5 个交易日(d1..d5)中 BK_GAP 实际有数据的 = 4 天,都 inflow
+    assert gap["last_5_inflow_days"] == 4
+
+
+# =====================================================================
+# 三种 sector_type
+# =====================================================================
+
+
+@pytest.fixture
+def seed_industry_concept_history(db_session):
+    """跨 industry/concept 各造 10 天数据。"""
+    def Y(b):
+        return b * 100_000_000
+
+    base = date(2026, 5, 20)
+    for i in range(10):
+        d = date(2026, 5, 20 + i)
+        db_session.add_all([
+            _mk_flow("BK_IND", "工业", d, Y(20), sector_type="industry"),
+            _mk_flow("BK_CON", "概念", d, Y(30), sector_type="concept"),
+        ])
+    db_session.commit()
+    return date(2026, 5, 29)
+
+
+def test_persistence_5_10_windows_industry(
+    client, seed_industry_concept_history
+):
+    body = client.get(
+        "/api/dashboard/sectors/persistence?sector_type=industry"
+    ).json()
+    assert len(body["items"]) == 1
+    ind = body["items"][0]
+    assert ind["last_5_inflow_days"] == 5
+    assert ind["last_10_inflow_days"] == 10
+
+
+def test_persistence_5_10_windows_concept(
+    client, seed_industry_concept_history
+):
+    body = client.get(
+        "/api/dashboard/sectors/persistence?sector_type=concept"
+    ).json()
+    con = body["items"][0]
+    assert con["last_5_inflow_days"] == 5
+    assert con["last_10_inflow_days"] == 10
+
+
+def test_persistence_5_10_windows_all(
+    client, seed_industry_concept_history
+):
+    """all → 跨类型合并,每个 item 仍带各自完整窗口字段。"""
+    body = client.get(
+        "/api/dashboard/sectors/persistence?sector_type=all"
+    ).json()
+    assert len(body["items"]) == 2
+    for it in body["items"]:
+        assert it["last_5_inflow_days"] == 5
+        assert it["last_10_inflow_days"] == 10
+        assert it["last_20_inflow_days"] == 10  # 历史只 10 天
+
+
+# =====================================================================
+# 不读 intraday + 兼容性兜底
+# =====================================================================
+
+
+def test_persistence_pr21_does_not_use_intraday(db_session, client):
+    """intraday 有数据,daily 空 → 仍返空。"""
+    snapshot = datetime(2026, 5, 29, 14, 30)
+    db_session.add(IntradaySectorFlow(
+        sector_code="BK_ID", sector_name="盘中", sector_type="industry",
+        trade_date=snapshot.date(), snapshot_time=snapshot,
+        main_inflow_wan_x10000=99_999_999_999,
+    ))
+    db_session.commit()
+
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    assert body["items"] == []
+
+
+def test_persistence_pr20_fields_still_present_after_pr21(
+    client, seed_history_25_days
+):
+    """所有 PR20 字段 + 6 个 PR21 新字段都必须在 response 里。"""
+    body = client.get("/api/dashboard/sectors/persistence").json()
+    item = body["items"][0]
+    required = {
+        # PR20
+        "continuous_inflow_days", "continuous_outflow_days",
+        "continuous_top20_days",
+        "last_20_inflow_days", "last_20_outflow_days", "last_20_top20_days",
+        # PR21
+        "last_5_inflow_days", "last_5_outflow_days", "last_5_top20_days",
+        "last_10_inflow_days", "last_10_outflow_days", "last_10_top20_days",
+    }
+    assert required.issubset(item.keys())

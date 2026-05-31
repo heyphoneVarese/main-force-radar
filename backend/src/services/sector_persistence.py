@@ -39,8 +39,8 @@ from src.models import SectorFlowDaily
 
 # top20 计算窗口大小(spec 写死 20)
 _TOP_K_FOR_STREAK = 20
-# last_N 统计窗口(spec 写死 20)
-_LAST_N_WINDOW = 20
+# PR21:多个 last_N 统计窗口
+_LAST_N_WINDOWS: tuple[int, ...] = (5, 10, 20)
 
 
 def _build_topk_lookup(
@@ -146,8 +146,12 @@ def build_sector_persistence(
     latest_rows.sort(key=lambda r: -r.main_inflow_wan_x10000)
     top_rows = latest_rows[:n]
 
-    # 4. 对每个上榜板块算 6 个事实字段
-    last_20_dates = all_dates[:_LAST_N_WINDOW]
+    # 4. 对每个上榜板块算事实字段
+    # PR21:预切多窗口子表;all_dates[:k] 在历史不足 k 天时自然返更短切片,
+    # 计数器只数实际存在的日 → 不需要 cap 逻辑。
+    windowed_dates: dict[int, list[date]] = {
+        k: all_dates[:k] for k in _LAST_N_WINDOWS
+    }
 
     items: list[dict[str, Any]] = []
     for i, top in enumerate(top_rows, start=1):
@@ -155,7 +159,7 @@ def build_sector_persistence(
         own_type = top.sector_type
         sector_hist = history_by_code.get(code, {})
 
-        # 连续天数
+        # 连续天数(从最新日往前)
         c_in = _continuous_count(
             code, own_type, all_dates, sector_hist, condition="inflow"
         )
@@ -167,22 +171,28 @@ def build_sector_persistence(
             condition="top20", topk_lookup=topk_lookup,
         )
 
-        # 近 20 日计数(交易日)
-        last_20_top = sum(
-            1 for d in last_20_dates
-            if code in topk_lookup.get((own_type, d), set())
-        )
-        last_20_in = 0
-        last_20_out = 0
-        for d in last_20_dates:
-            r = sector_hist.get(d)
-            if r is None:
-                continue
-            if r.main_inflow_wan_x10000 > 0:
-                last_20_in += 1
-            elif r.main_inflow_wan_x10000 < 0:
-                last_20_out += 1
-            # == 0 不计入两类
+        # PR21:多窗口 last_N 计数(交易日)
+        # 一次性算 3 个窗口的 3 种 metric,共 9 个计数
+        window_counts: dict[str, int] = {}
+        for k in _LAST_N_WINDOWS:
+            k_dates = windowed_dates[k]
+            k_top = 0
+            k_in = 0
+            k_out = 0
+            for d in k_dates:
+                if code in topk_lookup.get((own_type, d), set()):
+                    k_top += 1
+                r = sector_hist.get(d)
+                if r is None:
+                    continue  # spec:缺记录不加
+                if r.main_inflow_wan_x10000 > 0:
+                    k_in += 1
+                elif r.main_inflow_wan_x10000 < 0:
+                    k_out += 1
+                # == 0 不计入两类
+            window_counts[f"last_{k}_top20_days"] = k_top
+            window_counts[f"last_{k}_inflow_days"] = k_in
+            window_counts[f"last_{k}_outflow_days"] = k_out
 
         items.append({
             "sector_code": code,
@@ -193,9 +203,7 @@ def build_sector_persistence(
             "continuous_inflow_days": c_in,
             "continuous_outflow_days": c_out,
             "continuous_top20_days": c_top,
-            "last_20_top20_days": last_20_top,
-            "last_20_inflow_days": last_20_in,
-            "last_20_outflow_days": last_20_out,
+            **window_counts,
         })
 
     return {

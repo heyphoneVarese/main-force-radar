@@ -310,6 +310,14 @@ def _to_persistence_item(d: dict) -> SectorPersistenceItem:
         continuous_inflow_days=d["continuous_inflow_days"],
         continuous_outflow_days=d["continuous_outflow_days"],
         continuous_top20_days=d["continuous_top20_days"],
+        # PR21 新增 5/10 日窗口
+        last_5_inflow_days=d["last_5_inflow_days"],
+        last_5_outflow_days=d["last_5_outflow_days"],
+        last_5_top20_days=d["last_5_top20_days"],
+        last_10_inflow_days=d["last_10_inflow_days"],
+        last_10_outflow_days=d["last_10_outflow_days"],
+        last_10_top20_days=d["last_10_top20_days"],
+        # PR20 原 20 日窗口
         last_20_top20_days=d["last_20_top20_days"],
         last_20_inflow_days=d["last_20_inflow_days"],
         last_20_outflow_days=d["last_20_outflow_days"],

@@ -232,6 +232,34 @@ class SectorPersistenceItem(BaseModel):
         ge=0,
         description="从最新日起连续在同 sector_type Top20 里的天数;遇缺席则停"
     )
+
+    # ===== PR21 新增:5/10 日窗口 =====
+    last_5_inflow_days: int = Field(
+        ge=0, le=5,
+        description="最近 5 个交易日内 main_inflow > 0 的天数"
+    )
+    last_10_inflow_days: int = Field(
+        ge=0, le=10,
+        description="最近 10 个交易日内 main_inflow > 0 的天数"
+    )
+    last_5_outflow_days: int = Field(
+        ge=0, le=5,
+        description="最近 5 个交易日内 main_inflow < 0 的天数"
+    )
+    last_10_outflow_days: int = Field(
+        ge=0, le=10,
+        description="最近 10 个交易日内 main_inflow < 0 的天数"
+    )
+    last_5_top20_days: int = Field(
+        ge=0, le=5,
+        description="最近 5 个交易日内进入 Top20 的次数"
+    )
+    last_10_top20_days: int = Field(
+        ge=0, le=10,
+        description="最近 10 个交易日内进入 Top20 的次数"
+    )
+
+    # ===== PR20 原 20 日窗口(保留向后兼容)=====
     last_20_top20_days: int = Field(
         ge=0, le=20,
         description="最近 20 个交易日内进入 Top20 的次数"

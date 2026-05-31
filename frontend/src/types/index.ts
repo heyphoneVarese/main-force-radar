@@ -84,19 +84,30 @@ export interface TopSectors {
   sectors: SectorFlow[]
 }
 
-// PR20:板块连续天数事实(R3:全部是客观计数,不是评分)
+// PR20 + PR21:板块连续天数事实(R3:全部是客观计数,不是评分)
 export interface SectorPersistenceItem {
   rank: number
   sector_code: string
   sector_name: string
   sector_type: string
   main_inflow_yi: string                  // Decimal 亿元
+
   continuous_inflow_days: number          // 连续净流入天数
   continuous_outflow_days: number         // 连续净流出天数
   continuous_top20_days: number           // 连续 Top20 天数
-  last_20_top20_days: number              // 近 20 日 Top20 次数
-  last_20_inflow_days: number             // 近 20 日 inflow 次数
-  last_20_outflow_days: number            // 近 20 日 outflow 次数
+
+  // PR21 新增:5/10 日窗口
+  last_5_inflow_days: number
+  last_10_inflow_days: number
+  last_5_outflow_days: number
+  last_10_outflow_days: number
+  last_5_top20_days: number
+  last_10_top20_days: number
+
+  // PR20 原 20 日窗口(保留兼容)
+  last_20_top20_days: number
+  last_20_inflow_days: number
+  last_20_outflow_days: number
 }
 
 export interface SectorPersistenceResponse {
