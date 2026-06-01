@@ -28,6 +28,7 @@ from typing import Any, Callable, TypeVar
 import akshare as ak
 import pandas as pd
 import requests
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models import MarketIndexDaily, SectorFlowDaily
@@ -506,11 +507,75 @@ def insert_market_index_rows(
     return inserted
 
 
+def _fallback_industry_from_intraday(
+    session: Session,
+) -> list[dict[str, Any]]:
+    """direct + akshare 都拿不到 industry daily 时的兜底:用今日最新
+    intraday snapshot 的 industry 行,组成 sector_flow_daily 兼容 dict
+    列表(可直接喂 insert_sector_flow_rows)。
+
+    硬约束:
+    - 只挑 sector_type='industry'(spec:不要乱写 concept)
+    - latest_snapshot.date() 必须等于 cn_today();否则 return [] 放弃
+    - intraday 表为空或当日 industry 行为 0 → return []
+
+    取舍说明(写进 log 也写进调用方 stats):
+    - intraday 的 main_inflow_wan_x10000 是"该 snapshot 时刻起累计净流入",
+      不是真 EOD;盘中 14:30 触发时大约缺最后 30 分钟尾盘资金。
+    - 这是"日终数据丢了不如有 14:30 在手"的妥协,不是新的真值源。
+    """
+    # 延后导入避免顶层循环(本模块不依赖 intraday 业务)
+    from src.models import IntradaySectorFlow
+
+    latest_snap = session.scalar(
+        select(IntradaySectorFlow.snapshot_time)
+        .order_by(IntradaySectorFlow.snapshot_time.desc())
+        .limit(1)
+    )
+    if latest_snap is None:
+        return []
+
+    today = cn_today()
+    if latest_snap.date() != today:
+        logger.warning(
+            "fallback_from_intraday skipped: latest snapshot %s not today (%s)",
+            latest_snap, today,
+        )
+        return []
+
+    rows = list(session.scalars(
+        select(IntradaySectorFlow)
+        .where(IntradaySectorFlow.snapshot_time == latest_snap)
+        .where(IntradaySectorFlow.sector_type == "industry")
+    ))
+    if not rows:
+        logger.warning(
+            "fallback_from_intraday skipped: snapshot %s has 0 industry rows",
+            latest_snap,
+        )
+        return []
+
+    return [
+        {
+            "trade_date": today,
+            "sector_code": r.sector_code,
+            "sector_name": r.sector_name,
+            "sector_type": "industry",
+            "main_inflow_wan_x10000": r.main_inflow_wan_x10000,
+            "main_inflow_pct_x10000": r.main_inflow_pct_x10000,
+            "change_pct_x10000": r.change_pct_x10000,
+        }
+        for r in rows
+    ]
+
+
 def fetch_and_store_today(session: Session) -> dict[str, int]:
     """收盘后采集今日板块资金流 + 4 大指数,幂等入库。
 
     流程:
       1. fetch_sector_flow_industry() → sector_flow_daily(UNIQUE 去重)
+      1.1 [P0 fallback] 1) 失败或返空时,试 intraday_sector_flow 今日
+          最新 snapshot industry → 直接写入 sector_flow_daily
       2. 4 个市场指数各自 fetch_market_index(code) → market_index_daily(UNIQUE 去重)
 
     任何一项 fetcher 失败时,已就位 try-except + 重试 3 次后返回空列表,
@@ -518,7 +583,8 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
     幂等可补)。
 
     返回:统计字典 {sectors_fetched, sectors_inserted, indices_fetched,
-    indices_inserted, errors}。errors 是字符串列表,记录哪些项失败了。
+    indices_inserted, errors, [fallback_used?]}。errors 是字符串列表,
+    fallback_used 仅在 intraday fallback 命中时存在,值 'intraday_snapshot'。
     """
     stats: dict[str, Any] = {
         "sectors_fetched": 0,
@@ -528,28 +594,55 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
         "errors": [],
     }
 
-    # 1. 行业资金流
+    # 1. 行业资金流 — 主路径(direct → akshare)
+    sector_rows: list[dict[str, Any]] = []
+    upstream_err: str | None = None
     try:
         sector_rows = fetch_sector_flow_industry()
         stats["sectors_fetched"] = len(sector_rows)
-        if sector_rows:
-            stats["sectors_inserted"] = insert_sector_flow_rows(session, sector_rows)
-        else:
-            # 可观测性:fetcher 内部已吞掉 retry 异常,这里没收到 sector → 一定有问题。
-            # 不写 errors 的话上游 cron 完全看不出来。A 股交易日不可能 0 个板块。
-            stats["errors"].append(
-                "sector_flow_industry: returned 0 rows "
-                "(direct + akshare fallback both failed; check container logs "
-                "for 'fetch [...] failed after 3 attempts')"
+        if not sector_rows:
+            upstream_err = (
+                "returned 0 rows "
+                "(direct + akshare fallback both failed; check container "
+                "logs for 'fetch [...] failed after 3 attempts')"
             )
-        logger.info(
-            "fetch_and_store_today: sector_flow_industry fetched=%d inserted=%d",
-            stats["sectors_fetched"], stats["sectors_inserted"],
-        )
     except Exception as e:
-        msg = f"sector_flow_industry: {type(e).__name__}: {e}"
-        logger.error("fetch_and_store_today: %s", msg)
-        stats["errors"].append(msg)
+        upstream_err = f"{type(e).__name__}: {e}"
+        logger.error(
+            "fetch_and_store_today: sector_flow_industry %s", upstream_err,
+        )
+
+    # 1.1 P0 fallback:主路径拿不到 → 用今日最新 intraday snapshot industry
+    if not sector_rows:
+        fallback_rows = _fallback_industry_from_intraday(session)
+        if fallback_rows:
+            sector_rows = fallback_rows
+            stats["sectors_fetched"] = len(sector_rows)
+            stats["fallback_used"] = "intraday_snapshot"
+            logger.warning(
+                "fetch_and_store_today: sector_flow_industry "
+                "fallback_from_intraday — using %d rows from today's "
+                "latest intraday snapshot",
+                len(sector_rows),
+            )
+
+    if sector_rows:
+        stats["sectors_inserted"] = insert_sector_flow_rows(
+            session, sector_rows
+        )
+        logger.info(
+            "fetch_and_store_today: sector_flow_industry fetched=%d "
+            "inserted=%d fallback=%s",
+            stats["sectors_fetched"], stats["sectors_inserted"],
+            stats.get("fallback_used"),
+        )
+    else:
+        # 主路径失败且 fallback 也不可用 → 唯一一条 errors 行,
+        # 兼容旧测试断言("sector_flow_industry" + "0 rows")
+        stats["errors"].append(
+            f"sector_flow_industry: {upstream_err or 'returned 0 rows'}; "
+            "intraday fallback also empty/wrong-day"
+        )
 
     # 2. 4 大市场指数
     for code, name in DEFAULT_INDICES:
