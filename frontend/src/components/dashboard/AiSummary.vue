@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AISummary } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // AI 结论卡 — PR19 结构化重构。
 //
@@ -135,6 +136,7 @@ const sourceBadgeClass = computed(() =>
     </header>
 
     <div class="p-4 space-y-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">⚠ {{ error }}</p>
       <template v-else-if="data">

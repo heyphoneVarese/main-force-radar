@@ -9,6 +9,38 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 
+# =====================================================================
+# 数据新鲜度评估(P0 fix)— 防止旧数据伪装成新数据
+# =====================================================================
+
+
+class FreshnessInfo(BaseModel):
+    """数据源新鲜度评估;由 services.freshness 计算。
+
+    R3 红线:freshness 只是事实标记;不预测、不评分、不影响业务输出。
+    前端按 is_fresh=False 显示淡黄色 stale banner,内容仍照常渲染
+    (不做硬遮挡,保留诊断价值)。
+    """
+
+    is_fresh: bool = Field(
+        description="True = 数据新鲜可信;False = 数据可能过期,前端应显示提示"
+    )
+    source: str = Field(
+        description="此 freshness 评估的数据源:'intraday' | 'daily' | 'market'"
+    )
+    latest_time: datetime | None = Field(
+        default=None,
+        description="最新数据时间(date 会被转成当日 midnight datetime)"
+    )
+    age_minutes: int | None = Field(
+        default=None,
+        description="距 now 的分钟数;仅 intraday 源有意义"
+    )
+    reason: str = Field(
+        description="人类可读的判定原因(对开发/运维诊断有用)"
+    )
+
+
 class MarketIndexResponse(BaseModel):
     """单个市场指数(market_index_daily 一行)。
 
@@ -78,6 +110,9 @@ class TopSectorsResponse(BaseModel):
     sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
     sectors: list[SectorFlowResponse] = Field(
         description="按 main_inflow_wan 降序排;最多 n 条(默认 20)"
+    )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);is_fresh=False 时前端显示提示"
     )
 
 
@@ -288,6 +323,9 @@ class SectorPersistenceResponse(BaseModel):
     items: list[SectorPersistenceItem] = Field(
         description="最新日 main_inflow Top n;每条带 6 个事实字段"
     )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);is_fresh=False 时前端显示提示"
+    )
 
 
 class SectorPersistenceLeaderItem(BaseModel):
@@ -418,6 +456,9 @@ class DashboardRadarResponse(BaseModel):
     candidates: list[RadarFundItem] = Field(
         description="非持仓但命中强势板块的基金(可视为候选池)"
     )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);来自 intraday_sector_flow"
+    )
 
 
 class SectorBriefItem(BaseModel):
@@ -486,6 +527,9 @@ class AISummaryResponse(BaseModel):
     )
     cached: bool = Field(
         description="只在 source='daily_cached' 且命中 24h 缓存时为 true;intraday 路径恒为 false"
+    )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);跟随 source 选 intraday 或 daily"
     )
 
 
@@ -585,6 +629,9 @@ class HoldingSectorAlertsResponse(BaseModel):
         description="按 (holding_count, continuous_top20, |intraday|, name) 排;"
                     "最多 n 条(默认 10)"
     )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);本端点优先汇报 intraday 状态"
+    )
 
 
 # =====================================================================
@@ -628,6 +675,9 @@ class SectorTrendsResponse(BaseModel):
     sector_type: str = Field(description="industry / concept / all 回显")
     items: list[SectorTrendItem] = Field(
         description="顺序跟 leaders 一致;最多 n 条(默认 10)"
+    )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);来自 sector_flow_daily"
     )
 
 
@@ -734,4 +784,7 @@ class HoldingFactsSummaryResponse(BaseModel):
     buckets: HoldingFactsBuckets
     holdings: list[HoldingFactItem] = Field(
         description="按 fund_code ASC(跟旧 /holdings-summary 同顺序)"
+    )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估(P0 fix);来自 sector_flow_daily(主数据源)"
     )

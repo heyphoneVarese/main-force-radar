@@ -3,6 +3,7 @@ import type {
   SectorTrendItem,
   SectorTrendsResponse,
 } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 20 天资金趋势(PR25)— 展示最近 20 个交易日主力净流入(亿元)
 // 变化。纯事实可视化,不预测、不评分、不构成投资建议。
@@ -79,6 +80,7 @@ function barsFor(item: SectorTrendItem): BarMeta[] {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

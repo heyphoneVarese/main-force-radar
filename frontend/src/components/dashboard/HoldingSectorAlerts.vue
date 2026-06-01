@@ -4,6 +4,7 @@ import type {
   HoldingSectorAlertsResponse,
   HoldingSectorAlertType,
 } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 持仓-板块事实提醒(PR23 + PR24.1 可展开)。把板块连续性事实 + 盘中
 // 实时变动连接到我的持仓,生成中性事实提示。
@@ -101,6 +102,7 @@ function toggle(code: string): void {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

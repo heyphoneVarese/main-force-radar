@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SectorPersistenceItem, SectorPersistenceResponse } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 主线连续性卡(PR20)— 板块在收盘数据上的连续天数事实。
 //
@@ -130,6 +131,7 @@ function segmentText(seg: WindowSegment, dir: WindowDirection): string {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

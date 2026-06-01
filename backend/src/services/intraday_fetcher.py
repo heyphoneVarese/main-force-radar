@@ -207,9 +207,28 @@ def fetch_and_store_intraday(
         stats["skipped"] += type_skipped
 
     session.commit()
-    logger.info(
-        "fetch_and_store_intraday done snapshot=%s inserted=%d skipped=%d by_type=%s errors=%s",
-        stats["snapshot_time"], stats["inserted"], stats["skipped"],
-        stats["by_type"], stats["errors"],
-    )
+    # P0 fix:同 data_fetcher,inserted=0 + errors 非空 → ERROR;
+    # skipped 不算成功 — UniqueConstraint 命中只是幂等去重,本次没拿到新数据。
+    has_errors = bool(stats["errors"])
+    nothing_inserted = stats["inserted"] == 0
+    if has_errors and nothing_inserted:
+        logger.error(
+            "fetch_and_store_intraday FAILED snapshot=%s: inserted=0, "
+            "errors=%s, by_type=%s",
+            stats["snapshot_time"], stats["errors"], stats["by_type"],
+        )
+    elif has_errors:
+        logger.warning(
+            "fetch_and_store_intraday partial snapshot=%s: "
+            "inserted=%d errors=%s by_type=%s",
+            stats["snapshot_time"], stats["inserted"], stats["errors"],
+            stats["by_type"],
+        )
+    else:
+        logger.info(
+            "fetch_and_store_intraday done snapshot=%s inserted=%d "
+            "skipped=%d by_type=%s",
+            stats["snapshot_time"], stats["inserted"], stats["skipped"],
+            stats["by_type"],
+        )
     return stats

@@ -570,5 +570,23 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
             logger.error("fetch_and_store_today: %s", msg)
             stats["errors"].append(msg)
 
-    logger.info("fetch_and_store_today done: %s", stats)
+    # P0 fix:静默失败必须升级为 ERROR,否则上游"job executed successfully"
+    # 会把数据丢失伪装成正常。inserted=0 + errors 非空 → ERROR;
+    # 部分成功也用 WARNING 提示 partial。
+    has_errors = bool(stats["errors"])
+    nothing_inserted = (
+        stats["sectors_inserted"] == 0 and stats["indices_inserted"] == 0
+    )
+    if has_errors and nothing_inserted:
+        logger.error(
+            "fetch_and_store_today FAILED: inserted=0, errors=%s, full=%s",
+            stats["errors"], stats,
+        )
+    elif has_errors:
+        logger.warning(
+            "fetch_and_store_today partial: errors=%s, full=%s",
+            stats["errors"], stats,
+        )
+    else:
+        logger.info("fetch_and_store_today done: %s", stats)
     return stats

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
 import type { HoldingFactItem, HoldingFactsSummary } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 我的持仓分析(PR26 重构)— 取代情绪系统(bullish/bearish/warning/
 // neutral)。卡片只显示客观事实:
@@ -89,6 +90,7 @@ function extraSectorCount(item: HoldingFactItem): number {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

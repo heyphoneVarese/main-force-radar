@@ -26,6 +26,7 @@ from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
     DashboardRadarResponse,
+    FreshnessInfo,
     HoldingFactItem,
     HoldingFactsBuckets,
     HoldingFactsSummaryResponse,
@@ -54,6 +55,10 @@ from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
+from src.services.freshness import (
+    assess_daily_freshness,
+    assess_intraday_freshness,
+)
 from src.services.holding_facts import build_holding_facts
 from src.services.holding_sector_alerts import build_holding_sector_alerts
 from src.services.radar import build_intraday_radar
@@ -68,6 +73,19 @@ from src.utils.money import int_to_nav, int_to_pct, int_to_wan_yuan
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+# =====================================================================
+# 数据新鲜度装配辅助(P0 fix)
+# =====================================================================
+
+
+def _daily_freshness(db: Session) -> FreshnessInfo:
+    return FreshnessInfo(**assess_daily_freshness(db))
+
+
+def _intraday_freshness(db: Session) -> FreshnessInfo:
+    return FreshnessInfo(**assess_intraday_freshness(db))
 
 
 def _to_index_response(row: MarketIndexDaily) -> MarketIndexResponse:
@@ -263,7 +281,8 @@ def get_top_sectors(
     )
     if latest_date is None:
         return TopSectorsResponse(
-            trade_date=None, sector_type=sector_type, sectors=[]
+            trade_date=None, sector_type=sector_type, sectors=[],
+            freshness=_daily_freshness(db),
         )
 
     stmt = select(SectorFlowDaily).where(SectorFlowDaily.trade_date == latest_date)
@@ -276,6 +295,7 @@ def get_top_sectors(
         trade_date=latest_date,
         sector_type=sector_type,
         sectors=[_to_sector_response(r, i + 1) for i, r in enumerate(rows)],
+        freshness=_daily_freshness(db),
     )
 
 
@@ -365,6 +385,7 @@ def get_sector_persistence(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_persistence_item(it) for it in raw["items"]],
+        freshness=_daily_freshness(db),
     )
 
 
@@ -492,6 +513,7 @@ def get_sector_trends(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_trend_item(it) for it in raw["items"]],
+        freshness=_daily_freshness(db),
     )
 
 
@@ -608,6 +630,7 @@ def get_dashboard_radar(
         snapshot_time=raw["snapshot_time"],
         holdings=[_to_radar_item(h) for h in raw["holdings"]],
         candidates=[_to_radar_item(c) for c in raw["candidates"]],
+        freshness=_intraday_freshness(db),
     )
 
 
@@ -725,6 +748,7 @@ def get_holdings_facts(
         snapshot_time=raw["snapshot_time"],
         buckets=HoldingFactsBuckets(**raw["buckets"]),
         holdings=[_to_holding_fact_item(h) for h in raw["holdings"]],
+        freshness=_daily_freshness(db),
     )
 
 
@@ -803,6 +827,12 @@ def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
     - 旧字段 trade_date/summary/generated_at/cached 保留作向后兼容
     """
     raw = build_extended_ai_summary(db)
+    # freshness 跟随实际使用的数据源:source='intraday' → intraday;否则 daily
+    freshness = (
+        _intraday_freshness(db)
+        if raw["source"] == "intraday"
+        else _daily_freshness(db)
+    )
     return AISummaryResponse(
         source=raw["source"],
         summary_text=raw["summary_text"],
@@ -816,6 +846,7 @@ def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
         trade_date=raw["trade_date"],
         summary=raw["summary"],
         generated_at=raw["generated_at"],
+        freshness=freshness,
     )
 
 
@@ -883,4 +914,6 @@ def get_holding_sector_alerts(
         trade_date=raw["trade_date"],
         snapshot_time=raw["snapshot_time"],
         items=[_to_alert_item(it) for it in raw["items"]],
+        # alerts 主要看盘中信号,优先汇报 intraday 新鲜度
+        freshness=_intraday_freshness(db),
     )

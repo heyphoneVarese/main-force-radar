@@ -5,6 +5,7 @@ import type {
   IntradayTopSectors,
   TopSectors as TopSectorsData,
 } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // Top 20 板块卡(Phase 5.1 PR9 + PR15)。
 //
@@ -182,6 +183,7 @@ function pctColor(decStr: string | null | undefined): string {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <!-- PR15:盘中库空时给提示(daily 模式下渲染时) -->
       <p
         v-if="showIntradayFallbackNote"

@@ -54,6 +54,16 @@ export interface FundCreate {
 // 所有 Decimal 字段都是 string 透传(跟 Holding.cost_nav 一致语义)。
 // change_pct / main_inflow_pct 是 fraction("0.0066" = 0.66%),前端 ×100 显示。
 
+// P0 fix: 7 个关键 endpoint 都返回 freshness;is_fresh=false 时前端显示
+// 黄色 stale banner(StaleBanner.vue),但内容仍正常渲染。
+export interface FreshnessInfo {
+  is_fresh: boolean
+  source: 'intraday' | 'daily' | 'market'
+  latest_time: string | null     // ISO datetime
+  age_minutes: number | null     // intraday only
+  reason: string
+}
+
 export interface MarketIndex {
   index_code: string                 // sh000001 / sz399001 / sz399006 / sh000300
   index_name: string
@@ -82,6 +92,7 @@ export interface TopSectors {
   trade_date: string | null
   sector_type: 'industry' | 'concept' | 'all'
   sectors: SectorFlow[]
+  freshness: FreshnessInfo
 }
 
 // PR20 + PR21:板块连续天数事实(R3:全部是客观计数,不是评分)
@@ -114,6 +125,7 @@ export interface SectorPersistenceResponse {
   trade_date: string | null
   sector_type: 'industry' | 'concept' | 'all'
   items: SectorPersistenceItem[]
+  freshness: FreshnessInfo
 }
 
 // PR22:连续Top20排行榜单条(spec)
@@ -189,6 +201,7 @@ export interface HoldingSectorAlertsResponse {
   trade_date: string | null
   snapshot_time: string | null                 // ISO datetime;intraday 空 → null
   items: HoldingSectorAlertItem[]
+  freshness: FreshnessInfo
 }
 
 // PR25:20 天资金趋势(每条板块 = leaders 选出的对象 + 历史亿元序列)
@@ -207,6 +220,7 @@ export interface SectorTrendsResponse {
   trade_date: string | null
   sector_type: 'industry' | 'concept' | 'all'
   items: SectorTrendItem[]
+  freshness: FreshnessInfo
 }
 
 // PR26:持仓-事实摘要(替换旧情绪系统 HoldingsSummary)
@@ -247,6 +261,7 @@ export interface HoldingFactsSummary {
   snapshot_time: string | null
   buckets: HoldingFactsBuckets
   holdings: HoldingFactItem[]
+  freshness: FreshnessInfo
 }
 
 export interface IntradayTopSectors {
@@ -316,6 +331,9 @@ export interface AISummary {
   summary: string
   generated_at: string
   cached: boolean
+
+  // P0 fix
+  freshness: FreshnessInfo
 }
 
 // ===== 主力雷达(PR16)=====
@@ -343,4 +361,5 @@ export interface DashboardRadarResponse {
   snapshot_time: string | null       // ISO datetime
   holdings: RadarFundItem[]
   candidates: RadarFundItem[]
+  freshness: FreshnessInfo
 }

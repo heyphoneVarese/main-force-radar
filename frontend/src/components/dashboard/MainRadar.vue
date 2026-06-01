@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DashboardRadarResponse } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 主力雷达 — 盘中实时(PR16)。
 //
@@ -95,6 +96,7 @@ function badgeClass(badge: string): string {
     </header>
 
     <div class="p-4 space-y-5">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}
