@@ -149,14 +149,6 @@ def probe_db() -> None:
                 .order_by(IntradaySectorFlow.snapshot_time.desc())
                 .limit(1)
             )
-            snap_count = (
-                session.scalar(
-                    select(IntradaySectorFlow)
-                    .where(IntradaySectorFlow.snapshot_time == latest_snap)
-                    .with_only_columns()
-                )
-                if latest_snap else None
-            )
             n_intraday_at_latest = (
                 session.query(IntradaySectorFlow)
                 .filter(IntradaySectorFlow.snapshot_time == latest_snap)
