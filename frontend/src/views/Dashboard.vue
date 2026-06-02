@@ -1,322 +1,128 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { dashboardApi, type SectorTypeFilter } from '../api/client'
-import AiSummary from '../components/dashboard/AiSummary.vue'
-import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
-import HoldingSectorAlerts from '../components/dashboard/HoldingSectorAlerts.vue'
-import MainRadar from '../components/dashboard/MainRadar.vue'
-import MarketTemp from '../components/dashboard/MarketTemp.vue'
-import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
-import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
-import SectorPersistence from '../components/dashboard/SectorPersistence.vue'
-import SectorPersistenceLeaders from '../components/dashboard/SectorPersistenceLeaders.vue'
-import SectorTrends from '../components/dashboard/SectorTrends.vue'
-import TopSectorsCard from '../components/dashboard/TopSectors.vue'
+import { onMounted, ref } from 'vue'
+import { dashboardApi } from '../api/client'
+import ContinuousFlowRank from '../components/dashboard/ContinuousFlowRank.vue'
+import SectorDetailList from '../components/dashboard/SectorDetailList.vue'
+import TodayFlowTop10 from '../components/dashboard/TodayFlowTop10.vue'
 import type {
-  AISummary,
-  DashboardRadarResponse,
-  HoldingFactsSummary,
-  HoldingSectorAlertsResponse,
-  IntradayTopSectors,
-  MarketSnapshot,
   SectorPersistenceLeadersResponse,
-  SectorPersistenceResponse,
   SectorTrendsResponse,
-  TopFunds,
   TopSectors,
 } from '../types'
 
-// Dashboard V1(Phase 5.1)— 5 个卡片各自维护 {status, data, error}。
+// Dashboard 重构:只围绕 4 个问题
+//   1. 今天主力买什么 → 今日资金流入 Top10
+//   2. 今天主力卖什么 → 今日资金流出 Top10
+//   3. 哪些板块连续流入 → 连续流入排行
+//   4. 哪些板块连续流出 → 连续流出排行
+//   + 第 3 部分:板块详情(折叠,20 日 sparkline)
 //
-// 加载策略:5 个 Promise 并发发起,Promise.allSettled 不阻塞任何一个 —
-// 每个卡片的 .then() 各自就地写自己的 ref,慢的(AI 可能 1-3s)不影响
-// 已就绪的卡片渲染。allSettled 只是兜底"5 个都收尾后我也不关心"的语义。
+// 不显示:AI summary / 市场点评 / 评分 / 买卖建议 / 情绪 / 预测。
+// /holdings 是独立 page,不在 Dashboard 上。
 //
-// 容器(本文件)只管 fetch + 状态机 + Tab change → 重 fetch;
-// 子组件只接 props,不发请求 — 边界清晰,容器替换数据源很容易。
+// 每张卡 {status, data, error} 三件套独立 fetch,慢的不阻塞快的。
 
 type Status = 'loading' | 'ready' | 'error'
 
-const marketStatus = ref<Status>('loading')
-const marketData = ref<MarketSnapshot | null>(null)
-const marketError = ref('')
+// 第 1 屏:今日 inflow Top10
+const inflowStatus = ref<Status>('loading')
+const inflowData = ref<TopSectors | null>(null)
+const inflowError = ref('')
 
-const sectorsStatus = ref<Status>('loading')
-const sectorsData = ref<TopSectors | null>(null)
-const sectorsError = ref('')
-const sectorsType = ref<SectorTypeFilter>('industry')
+// 第 1 屏:今日 outflow Top10
+const outflowStatus = ref<Status>('loading')
+const outflowData = ref<TopSectors | null>(null)
+const outflowError = ref('')
 
-// PR15:盘中实时数据 + mode 状态
-const intradaySectorsStatus = ref<Status>('loading')
-const intradaySectorsData = ref<IntradayTopSectors | null>(null)
-const intradaySectorsError = ref('')
-const sectorsMode = ref<'intraday' | 'daily'>('daily')  // 默认安全;intraday 拿到 → 自动切
-const userPickedMode = ref(false)  // 用户手动切过 → 不再自动覆盖
+// 第 2 部分:连续流入排行
+const contInflowStatus = ref<Status>('loading')
+const contInflowData = ref<SectorPersistenceLeadersResponse | null>(null)
+const contInflowError = ref('')
 
-// PR26:holdings 改用 facts(替代旧情绪系统)。HoldingsSummary 类型保留
-// 在 client.ts 给 holdingsSummary() 用,只是 UI 不再消费它。
-const holdingsStatus = ref<Status>('loading')
-const holdingsData = ref<HoldingFactsSummary | null>(null)
-const holdingsError = ref('')
+// 第 2 部分:连续流出排行
+const contOutflowStatus = ref<Status>('loading')
+const contOutflowData = ref<SectorPersistenceLeadersResponse | null>(null)
+const contOutflowError = ref('')
 
-const fundsStatus = ref<Status>('loading')
-const fundsData = ref<TopFunds | null>(null)
-const fundsError = ref('')
-
-const aiStatus = ref<Status>('loading')
-const aiData = ref<AISummary | null>(null)
-const aiError = ref('')
-
-// PR16:主力雷达(intraday)
-const radarStatus = ref<Status>('loading')
-const radarData = ref<DashboardRadarResponse | null>(null)
-const radarError = ref('')
-
-// PR20:主线连续性(收盘事实)
-const persistenceStatus = ref<Status>('loading')
-const persistenceData = ref<SectorPersistenceResponse | null>(null)
-const persistenceError = ref('')
-
-// PR22:连续Top20排行榜(收盘事实排行,不按今日 inflow 排)
-const persistenceLeadersStatus = ref<Status>('loading')
-const persistenceLeadersData = ref<SectorPersistenceLeadersResponse | null>(null)
-const persistenceLeadersError = ref('')
-
-// PR23:持仓-板块事实预警(把板块连续性 + 盘中实时连接到我的持仓)
-const holdingAlertsStatus = ref<Status>('loading')
-const holdingAlertsData = ref<HoldingSectorAlertsResponse | null>(null)
-const holdingAlertsError = ref('')
-
-// PR25:20 天资金趋势(复用 leaders 选板块)
+// 第 3 部分:板块详情(20 日趋势)
 const trendsStatus = ref<Status>('loading')
 const trendsData = ref<SectorTrendsResponse | null>(null)
 const trendsError = ref('')
-
-// 给 HoldingMappings 用:全局板块 rank 映射(sector_type=all, n=100)。
-// 单独拉一次,跟用户 Tab 状态(sectorsType)解耦 — 即使 Tab 在"行业",
-// HoldingMappings 显示的 rank 仍是全局 across-types 排名,不会因
-// Tab 切换变动。失败也不致命,fallback "—"。
-const allSectorRanks = ref<Map<string, number>>(new Map())
-
-// 持仓 fund_code 集合,客户端过滤 funds/top 用 — 保证 HoldingMappings
-// 只显示用户持仓基金(而非整个 funds 表)。holdingsData 没到前是空 Set,
-// 此时 HoldingMappings 显示空态"holdings 未加载"短暂占位,几百毫秒后
-// holdings 到 → 自动填充。
-const holdingCodes = computed<Set<string>>(() => {
-  if (!holdingsData.value) return new Set()
-  return new Set(holdingsData.value.holdings.map((h) => h.fund_code))
-})
 
 function _errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-// sectors 单独抽出来 — 给 tab 切换复用。状态机:点 tab 立刻把 status
-// 切回 'loading',旧 data 保留显示直到新数据到(避免闪烁)。
-function loadSectors(t: SectorTypeFilter): Promise<void> {
-  sectorsStatus.value = 'loading'
-  return dashboardApi.topSectors(20, t).then(
-    (d) => { sectorsData.value = d; sectorsStatus.value = 'ready' },
-    (e) => { sectorsError.value = _errMsg(e); sectorsStatus.value = 'error' },
-  )
-}
-
-// PR15:盘中实时,跟 daily 同样的 tab 切换语义
-function loadIntradaySectors(t: SectorTypeFilter): Promise<void> {
-  intradaySectorsStatus.value = 'loading'
-  return dashboardApi.intradayTopSectors(20, t).then(
-    (d) => {
-      intradaySectorsData.value = d
-      intradaySectorsStatus.value = 'ready'
-      // 默认逻辑:用户没手动切过 → intraday 有今日数据就自动切 intraday
-      if (!userPickedMode.value && (d.sectors?.length ?? 0) > 0) {
-        sectorsMode.value = 'intraday'
-      }
-    },
-    (e) => {
-      intradaySectorsError.value = _errMsg(e)
-      intradaySectorsStatus.value = 'error'
-    },
-  )
-}
-
-function onSectorsTypeChange(t: SectorTypeFilter): void {
-  if (t === sectorsType.value) return
-  sectorsType.value = t
-  // 两个数据源一起切(intraday 库可能某些 type 也有数据)
-  void loadSectors(t)
-  void loadIntradaySectors(t)
-}
-
-function onSectorsModeChange(m: 'intraday' | 'daily'): void {
-  if (m === sectorsMode.value) return
-  sectorsMode.value = m
-  userPickedMode.value = true
-}
-
 onMounted(() => {
   void Promise.allSettled([
-    dashboardApi.market().then(
-      (d) => { marketData.value = d; marketStatus.value = 'ready' },
-      (e) => { marketError.value = _errMsg(e); marketStatus.value = 'error' },
+    // 1. inflow Top10 — 后端 n=30 给前端宽度,组件按符号过滤再裁前 10
+    dashboardApi.topSectors(30, 'industry', 'inflow').then(
+      (d) => { inflowData.value = d; inflowStatus.value = 'ready' },
+      (e) => { inflowError.value = _errMsg(e); inflowStatus.value = 'error' },
     ),
-    loadSectors(sectorsType.value),
-    loadIntradaySectors(sectorsType.value),
-    // PR26:holdings 改 facts
-    dashboardApi.holdingsFacts().then(
-      (d) => { holdingsData.value = d; holdingsStatus.value = 'ready' },
-      (e) => { holdingsError.value = _errMsg(e); holdingsStatus.value = 'error' },
+    // 2. outflow Top10 — 同上
+    dashboardApi.topSectors(30, 'industry', 'outflow').then(
+      (d) => { outflowData.value = d; outflowStatus.value = 'ready' },
+      (e) => { outflowError.value = _errMsg(e); outflowStatus.value = 'error' },
     ),
-    dashboardApi.topFunds().then(
-      (d) => { fundsData.value = d; fundsStatus.value = 'ready' },
-      (e) => { fundsError.value = _errMsg(e); fundsStatus.value = 'error' },
+    // 3. 连续流入排行(min_days=1 显示所有有流入的;n=10)
+    dashboardApi.sectorPersistenceLeaders(10, 'industry', 1, 'continuous_inflow').then(
+      (d) => { contInflowData.value = d; contInflowStatus.value = 'ready' },
+      (e) => { contInflowError.value = _errMsg(e); contInflowStatus.value = 'error' },
     ),
-    dashboardApi.aiSummary().then(
-      (d) => { aiData.value = d; aiStatus.value = 'ready' },
-      (e) => { aiError.value = _errMsg(e); aiStatus.value = 'error' },
+    // 4. 连续流出排行
+    dashboardApi.sectorPersistenceLeaders(10, 'industry', 1, 'continuous_outflow').then(
+      (d) => { contOutflowData.value = d; contOutflowStatus.value = 'ready' },
+      (e) => { contOutflowError.value = _errMsg(e); contOutflowStatus.value = 'error' },
     ),
-    // PR16:主力雷达
-    dashboardApi.radar('intraday', 20).then(
-      (d) => { radarData.value = d; radarStatus.value = 'ready' },
-      (e) => { radarError.value = _errMsg(e); radarStatus.value = 'error' },
-    ),
-    // PR20:主线连续性事实
-    dashboardApi.sectorPersistence(20, 'industry').then(
-      (d) => { persistenceData.value = d; persistenceStatus.value = 'ready' },
-      (e) => {
-        persistenceError.value = _errMsg(e)
-        persistenceStatus.value = 'error'
-      },
-    ),
-    // PR22 + PR24:连续Top20排行榜(默认 industry,10 条,min_days=3)
-    dashboardApi.sectorPersistenceLeaders(10, 'industry', 3).then(
-      (d) => {
-        persistenceLeadersData.value = d
-        persistenceLeadersStatus.value = 'ready'
-      },
-      (e) => {
-        persistenceLeadersError.value = _errMsg(e)
-        persistenceLeadersStatus.value = 'error'
-      },
-    ),
-    // PR23:持仓-板块事实预警(默认 10 条)
-    dashboardApi.holdingSectorAlerts(10).then(
-      (d) => {
-        holdingAlertsData.value = d
-        holdingAlertsStatus.value = 'ready'
-      },
-      (e) => {
-        holdingAlertsError.value = _errMsg(e)
-        holdingAlertsStatus.value = 'error'
-      },
-    ),
-    // PR25:20 天资金趋势(industry,10 条;跟 leaders 同顺序)
+    // 5. 板块详情(20 天趋势)
     dashboardApi.sectorTrends(10, 'industry').then(
-      (d) => {
-        trendsData.value = d
-        trendsStatus.value = 'ready'
-      },
-      (e) => {
-        trendsError.value = _errMsg(e)
-        trendsStatus.value = 'error'
-      },
-    ),
-    // 全局板块 rank 字典(仅给 HoldingMappings 显示 "板块 #N" 用)
-    // 失败时静默吞掉 — rank 显示就 fallback "—",不影响其他字段。
-    dashboardApi.topSectors(100, 'all').then(
-      (d) => {
-        const m = new Map<string, number>()
-        for (const s of d.sectors) m.set(s.sector_code, s.rank)
-        allSectorRanks.value = m
-      },
-      () => { /* swallow */ },
+      (d) => { trendsData.value = d; trendsStatus.value = 'ready' },
+      (e) => { trendsError.value = _errMsg(e); trendsStatus.value = 'error' },
     ),
   ])
 })
-
-// 所有显示辅助函数已分配到对应子组件(MarketTemp / AiSummary /
-// TopSectors / TopFunds / MyHoldingsTable),容器只剩 fetch + 状态。
 </script>
 
 <template>
   <div class="space-y-4">
-    <!-- 1. 今日市场温度 -->
-    <MarketTemp :status="marketStatus" :data="marketData" :error="marketError" />
+    <!-- 第 1 屏:今日 Top10 inflow + outflow(桌面并排,移动端上下) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <TodayFlowTop10
+        :status="inflowStatus"
+        :data="inflowData"
+        :error="inflowError"
+        order="inflow"
+      />
+      <TodayFlowTop10
+        :status="outflowStatus"
+        :data="outflowData"
+        :error="outflowError"
+        order="outflow"
+      />
+    </div>
 
-    <!-- 2. AI 一句话结论 -->
-    <AiSummary :status="aiStatus" :data="aiData" :error="aiError" />
+    <!-- 第 2 部分:连续流入 + 连续流出 排行 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <ContinuousFlowRank
+        :status="contInflowStatus"
+        :data="contInflowData"
+        :error="contInflowError"
+        direction="inflow"
+      />
+      <ContinuousFlowRank
+        :status="contOutflowStatus"
+        :data="contOutflowData"
+        :error="contOutflowError"
+        direction="outflow"
+      />
+    </div>
 
-    <!-- 3. Top 20 板块(PR15 加 intraday 模式) -->
-    <TopSectorsCard
-      :status="sectorsStatus"
-      :data="sectorsData"
-      :error="sectorsError"
-      :intraday-status="intradaySectorsStatus"
-      :intraday-data="intradaySectorsData"
-      :intraday-error="intradaySectorsError"
-      :current-type="sectorsType"
-      :current-mode="sectorsMode"
-      @change-type="onSectorsTypeChange"
-      @change-mode="onSectorsModeChange"
-    />
-
-    <!-- 4. 主线连续性 · 收盘事实(PR20)-->
-    <SectorPersistence
-      :status="persistenceStatus"
-      :data="persistenceData"
-      :error="persistenceError"
-    />
-
-    <!-- 4b. 连续Top20排行榜(PR22 — 按持续天数排,不按今日 inflow)-->
-    <SectorPersistenceLeaders
-      :status="persistenceLeadersStatus"
-      :data="persistenceLeadersData"
-      :error="persistenceLeadersError"
-    />
-
-    <!-- 4c. 20 天资金趋势(PR25 — 跟 leaders 同板块同顺序的 sparkline)-->
-    <SectorTrends
+    <!-- 第 3 部分:板块详情(折叠 + 20 日 sparkline) -->
+    <SectorDetailList
       :status="trendsStatus"
       :data="trendsData"
       :error="trendsError"
-    />
-
-    <!-- 4d. 持仓-板块事实提醒(PR23)-->
-    <HoldingSectorAlerts
-      :status="holdingAlertsStatus"
-      :data="holdingAlertsData"
-      :error="holdingAlertsError"
-    />
-
-    <!-- 5. 主力雷达(PR16 — intraday 板块 → 基金映射)-->
-    <MainRadar
-      :status="radarStatus"
-      :data="radarData"
-      :error="radarError"
-    />
-
-    <!-- 5. 最强 20 基金候选(市场维度,不过滤持仓)-->
-    <MarketTopFunds
-      :status="fundsStatus"
-      :data="fundsData"
-      :error="fundsError"
-      :holding-codes="holdingCodes"
-    />
-
-    <!-- 5. 我的持仓映射(客户端过滤至 holdings)-->
-    <HoldingMappings
-      :status="fundsStatus"
-      :data="fundsData"
-      :error="fundsError"
-      :holding-codes="holdingCodes"
-      :sector-rank-by-code="allSectorRanks"
-    />
-
-    <!-- 5. 我的持仓分析 -->
-    <MyHoldingsTable
-      :status="holdingsStatus"
-      :data="holdingsData"
-      :error="holdingsError"
     />
   </div>
 </template>

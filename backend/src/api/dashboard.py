@@ -265,14 +265,19 @@ def get_top_sectors(
         "industry",
         description="过滤板块类型;all = 不过滤,行业/概念混排"
     ),
+    order: Literal["inflow", "outflow"] = Query(
+        "inflow",
+        description="排序口径:inflow=主力净流入 DESC(默认,兼容旧调用);"
+                    "outflow=ASC(最负的在前,适合显示资金流出榜)"
+    ),
     db: Session = Depends(get_session),
 ) -> TopSectorsResponse:
-    """Top N 板块(最新交易日,按主力净流入降序)。
+    """Top N 板块(最新交易日,按主力净流入排)。
 
-    - 取整张 sector_flow_daily 最大的 trade_date(可能跟 market_index_daily 不同步)
-    - 该日所有板块按 main_inflow_wan_x10000 DESC 排
-    - 负流入会沉底,Top N 就是"强势板块"
-    - 空库 → {"trade_date": null, "sector_type": <param>, "sectors": []} + HTTP 200
+    - 取整张 sector_flow_daily 最大的 trade_date
+    - order='inflow'(默认):按 main_inflow_wan_x10000 DESC,正向最大在前
+    - order='outflow':按 main_inflow_wan_x10000 ASC,最负的在前
+    - 空库 → trade_date=null, sectors=[] + HTTP 200
     """
     latest_date = db.scalar(
         select(SectorFlowDaily.trade_date)
@@ -288,7 +293,11 @@ def get_top_sectors(
     stmt = select(SectorFlowDaily).where(SectorFlowDaily.trade_date == latest_date)
     if sector_type != "all":
         stmt = stmt.where(SectorFlowDaily.sector_type == sector_type)
-    stmt = stmt.order_by(SectorFlowDaily.main_inflow_wan_x10000.desc()).limit(n)
+    if order == "inflow":
+        stmt = stmt.order_by(SectorFlowDaily.main_inflow_wan_x10000.desc())
+    else:
+        stmt = stmt.order_by(SectorFlowDaily.main_inflow_wan_x10000.asc())
+    stmt = stmt.limit(n)
 
     rows = db.scalars(stmt).all()
     return TopSectorsResponse(
@@ -428,8 +437,13 @@ def get_sector_persistence_leaders(
     ),
     min_days: int = Query(
         3, ge=1, le=60,
-        description="过滤门槛:只显示 continuous_top20_days >= min_days 的板块"
-                    "(PR24,默认 3;=1 → 等同 PR22)"
+        description="过滤门槛:被选 sort_by 轴 >= min_days(默认 3)"
+    ),
+    sort_by: Literal[
+        "continuous_top20", "continuous_inflow", "continuous_outflow"
+    ] = Query(
+        "continuous_top20",
+        description="排序轴:连续 Top20(默认)/ 连续流入 / 连续流出"
     ),
     db: Session = Depends(get_session),
 ) -> SectorPersistenceLeadersResponse:
@@ -452,12 +466,13 @@ def get_sector_persistence_leaders(
             "min_days": <param>, "items": []} + 200
     """
     raw = build_persistence_leaders(
-        db, n=n, sector_type=sector_type, min_days=min_days
+        db, n=n, sector_type=sector_type, min_days=min_days, sort_by=sort_by,
     )
     return SectorPersistenceLeadersResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         min_days=raw["min_days"],
+        sort_by=raw["sort_by"],
         items=[_to_leader_item(it) for it in raw["items"]],
     )
 

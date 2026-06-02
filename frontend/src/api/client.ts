@@ -77,12 +77,22 @@ export const fundsApi = {
 // 前端只负责字符串 → Number 显示。空数据时 trade_date=null,子列表=[]。
 
 export type SectorTypeFilter = 'industry' | 'concept' | 'all'
+export type FlowOrder = 'inflow' | 'outflow'
+export type LeaderSortBy =
+  | 'continuous_top20'
+  | 'continuous_inflow'
+  | 'continuous_outflow'
 
 export const dashboardApi = {
   market: () => jsonFetch<MarketSnapshot>(`${BASE}/dashboard/market`),
-  topSectors: (n: number = 20, sectorType: SectorTypeFilter = 'industry') =>
+  topSectors: (
+    n: number = 20,
+    sectorType: SectorTypeFilter = 'industry',
+    order: FlowOrder = 'inflow',
+  ) =>
     jsonFetch<TopSectors>(
-      `${BASE}/dashboard/sectors/top?n=${n}&sector_type=${sectorType}`
+      `${BASE}/dashboard/sectors/top?n=${n}&sector_type=${sectorType}` +
+      `&order=${order}`
     ),
   intradayTopSectors: (n: number = 20, sectorType: SectorTypeFilter = 'industry') =>
     jsonFetch<IntradayTopSectors>(
@@ -108,14 +118,17 @@ export const dashboardApi = {
       `${BASE}/dashboard/sectors/persistence?n=${n}&sector_type=${sectorType}`
     ),
   // PR22 + PR24:连续Top20排行榜(min_days 默认 3,过滤刚上榜板块)
+  // Dashboard 重构:加 sortBy 支持 continuous_inflow / continuous_outflow
   sectorPersistenceLeaders: (
     n: number = 10,
     sectorType: SectorTypeFilter = 'industry',
     minDays: number = 3,
+    sortBy: LeaderSortBy = 'continuous_top20',
   ) =>
     jsonFetch<SectorPersistenceLeadersResponse>(
       `${BASE}/dashboard/sectors/persistence/leaders` +
-      `?n=${n}&sector_type=${sectorType}&min_days=${minDays}`
+      `?n=${n}&sector_type=${sectorType}&min_days=${minDays}` +
+      `&sort_by=${sortBy}`
     ),
   // PR23:持仓-板块事实预警
   holdingSectorAlerts: (n: number = 10) =>

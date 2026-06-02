@@ -239,38 +239,46 @@ def build_sector_persistence(
 # =====================================================================
 
 
+# 支持的排序轴 → 该轴对应的 facts 字段名
+_SORT_BY_FIELD: dict[str, str] = {
+    "continuous_top20": "continuous_top20_days",
+    "continuous_inflow": "continuous_inflow_days",
+    "continuous_outflow": "continuous_outflow_days",
+}
+
+
 def build_persistence_leaders(
     session: Session,
     *,
     n: int = 10,
     sector_type: str = "industry",
     min_days: int = 3,
+    sort_by: str = "continuous_top20",
 ) -> dict[str, Any]:
-    """排行榜:对最新日所有(过滤后的)板块算事实,然后按"持续出现"键排序。
+    """排行榜:对最新日所有(过滤后的)板块算事实,然后按指定轴排序。
 
     R3 红线:**不做评分 / 健康度 / 买卖建议**。这里只是用客观计数键做
-    排序顺序的调整 — continuous_top20_days 排第一是因为它最能反映"持续
-    出现"这个事实,不是"看多/看空"。
+    排序顺序的调整 — 全部是事实计数。
 
-    排序键(全部 DESC,最后 sector_code ASC 兜底稳定):
-      1. continuous_top20_days
-      2. last_20_top20_days
-      3. last_20_inflow_days
-      4. main_inflow_wan_x10000(latest 当日)
-      5. sector_code(ASC,兜底)
+    sort_by 支持(默认 continuous_top20,跟 PR22/PR24 行为完全一致):
+      - "continuous_top20" : 按连续 Top20 天数排(原有)
+      - "continuous_inflow": 按连续净流入天数排
+      - "continuous_outflow": 按连续净流出天数排
 
-    latest_rank:在 sector_type 过滤后的最新日按 inflow DESC 的位置。
-
-    PR24:加 min_days 过滤,默认 3 — 默认排除"今天刚上榜"的板块,只
-    显示真正"持续出现"的主线。min_days=1 等同 PR22 行为。过滤后不足 n
-    条不补低于 min_days 的板块。
+    min_days 过滤适用于"被选轴"。例如 sort_by='continuous_inflow' +
+    min_days=3 → 只保留连续流入 >=3 天的板块。
     """
+    if sort_by not in _SORT_BY_FIELD:
+        raise ValueError(f"unsupported sort_by: {sort_by}")
+    sort_field = _SORT_BY_FIELD[sort_by]
+
     ctx = _load_context(session)
     if ctx is None:
         return {
             "trade_date": None,
             "sector_type": sector_type,
             "min_days": min_days,
+            "sort_by": sort_by,
             "items": [],
         }
 
@@ -295,18 +303,31 @@ def build_persistence_leaders(
         facts["latest_rank"] = facts["rank"]
         all_items.append(facts)
 
-    # PR24:过滤 continuous_top20_days < min_days 的板块
-    filtered = [
-        it for it in all_items if it["continuous_top20_days"] >= min_days
-    ]
+    # 过滤:按被选轴的天数门槛
+    filtered = [it for it in all_items if it[sort_field] >= min_days]
 
-    # 按 leader keys 排
-    def _leader_key(item: dict[str, Any]) -> tuple[int, int, int, int, str]:
+    # 按 leader keys 排;主键是 sort_by 对应字段 DESC,后面带合理 tiebreak
+    def _leader_key(item: dict[str, Any]) -> tuple:
+        if sort_by == "continuous_top20":
+            return (
+                -item["continuous_top20_days"],
+                -item["last_20_top20_days"],
+                -item["last_20_inflow_days"],
+                -item["main_inflow_wan_x10000"],
+                item["sector_code"],
+            )
+        if sort_by == "continuous_inflow":
+            return (
+                -item["continuous_inflow_days"],
+                -item["last_20_inflow_days"],
+                -item["main_inflow_wan_x10000"],
+                item["sector_code"],
+            )
+        # continuous_outflow:主键 DESC,outflow 配色 → 越负越靠前
         return (
-            -item["continuous_top20_days"],
-            -item["last_20_top20_days"],
-            -item["last_20_inflow_days"],
-            -item["main_inflow_wan_x10000"],
+            -item["continuous_outflow_days"],
+            -item["last_20_outflow_days"],
+            item["main_inflow_wan_x10000"],  # ASC = 更负在前
             item["sector_code"],
         )
 
@@ -316,6 +337,7 @@ def build_persistence_leaders(
         "trade_date": ctx["latest_date"],
         "sector_type": sector_type,
         "min_days": min_days,
+        "sort_by": sort_by,
         "items": filtered[:n],
     }
 

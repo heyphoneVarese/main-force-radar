@@ -395,10 +395,14 @@ class SectorPersistenceLeadersResponse(BaseModel):
     sector_type: str = Field(description="请求的过滤类型:industry / concept / all")
     min_days: int = Field(
         ge=1, le=60,
-        description="过滤门槛:continuous_top20_days >= min_days(PR24,默认 3)"
+        description="过滤门槛:被选 sort_by 轴的天数 >= min_days(默认 3)"
+    )
+    sort_by: str = Field(
+        description="排序轴:'continuous_top20' | 'continuous_inflow' | "
+                    "'continuous_outflow'(默认 continuous_top20)"
     )
     items: list[SectorPersistenceLeaderItem] = Field(
-        description="按 leader keys 排;最多 n 条(过滤后不足 n 时显示实际条数)"
+        description="按 sort_by 轴排;最多 n 条(过滤后不足 n 时显示实际条数)"
     )
 
 
