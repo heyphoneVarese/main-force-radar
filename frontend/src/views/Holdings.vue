@@ -3,8 +3,20 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { useMediaQuery } from '@vueuse/core'
-import { fundsApi, holdingsApi } from '../api/client'
-import type { Fund, Holding } from '../types'
+import { dashboardApi, fundsApi, holdingsApi } from '../api/client'
+import type {
+  DashboardRadarResponse,
+  Fund,
+  Holding,
+  HoldingFactsSummary,
+  TopFunds,
+} from '../types'
+// Phase 2:在 CRUD 下面叠加 4 张分析卡(我的事实摘要 / 主力雷达 /
+// 基金候选 / 持仓映射)。从 Dashboard 迁过来,原 fetch + 状态机沿用。
+import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
+import MainRadar from '../components/dashboard/MainRadar.vue'
+import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
+import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
 
 // < 768px → 卡片;>= 768px → 表格
 const isMobile = useMediaQuery('(max-width: 768px)')
@@ -251,7 +263,60 @@ async function confirmDelete(h: Holding) {
   }
 }
 
-onMounted(loadAll)
+// ===== Phase 2:分析卡 fetch =====
+type AnalyticStatus = 'loading' | 'ready' | 'error'
+
+const factsStatus = ref<AnalyticStatus>('loading')
+const factsData = ref<HoldingFactsSummary | null>(null)
+const factsError = ref('')
+
+const radarStatus = ref<AnalyticStatus>('loading')
+const radarData = ref<DashboardRadarResponse | null>(null)
+const radarError = ref('')
+
+const fundsTopStatus = ref<AnalyticStatus>('loading')
+const fundsTopData = ref<TopFunds | null>(null)
+const fundsTopError = ref('')
+
+// 全局板块 rank 字典(给 HoldingMappings 显示"板块 #N");失败静默
+const allSectorRanks = ref<Map<string, number>>(new Map())
+
+// 客户端过滤至当前持仓 — fund_code 集合
+const holdingCodes = computed<Set<string>>(() => new Set(holdings.value.map((h) => h.fund_code)))
+
+function _analyticErr(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+function loadAnalytics(): void {
+  void Promise.allSettled([
+    dashboardApi.holdingsFacts().then(
+      (d) => { factsData.value = d; factsStatus.value = 'ready' },
+      (e) => { factsError.value = _analyticErr(e); factsStatus.value = 'error' },
+    ),
+    dashboardApi.radar('intraday', 20).then(
+      (d) => { radarData.value = d; radarStatus.value = 'ready' },
+      (e) => { radarError.value = _analyticErr(e); radarStatus.value = 'error' },
+    ),
+    dashboardApi.topFunds(20).then(
+      (d) => { fundsTopData.value = d; fundsTopStatus.value = 'ready' },
+      (e) => { fundsTopError.value = _analyticErr(e); fundsTopStatus.value = 'error' },
+    ),
+    dashboardApi.topSectors(100, 'all').then(
+      (d) => {
+        const m = new Map<string, number>()
+        for (const s of d.sectors) m.set(s.sector_code, s.rank)
+        allSectorRanks.value = m
+      },
+      () => { /* swallow */ },
+    ),
+  ])
+}
+
+onMounted(() => {
+  void loadAll()
+  loadAnalytics()
+})
 </script>
 
 <template>
@@ -513,5 +578,42 @@ onMounted(loadAll)
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- ===== Phase 2:持仓分析卡(原 Dashboard 4 张卡迁过来) ===== -->
+    <section class="mt-8 space-y-4">
+      <header class="border-t pt-6">
+        <h3 class="text-lg font-semibold text-gray-900">持仓分析</h3>
+        <p class="text-xs text-gray-500 mt-1">
+          我的事实摘要 · 主力雷达 · 基金候选 · 持仓映射
+        </p>
+      </header>
+
+      <MyHoldingsTable
+        :status="factsStatus"
+        :data="factsData"
+        :error="factsError"
+      />
+
+      <MainRadar
+        :status="radarStatus"
+        :data="radarData"
+        :error="radarError"
+      />
+
+      <MarketTopFunds
+        :status="fundsTopStatus"
+        :data="fundsTopData"
+        :error="fundsTopError"
+        :holding-codes="holdingCodes"
+      />
+
+      <HoldingMappings
+        :status="fundsTopStatus"
+        :data="fundsTopData"
+        :error="fundsTopError"
+        :holding-codes="holdingCodes"
+        :sector-rank-by-code="allSectorRanks"
+      />
+    </section>
   </div>
 </template>

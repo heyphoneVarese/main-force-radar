@@ -6,15 +6,27 @@ import { RouterLink, RouterView } from 'vue-router'
   <div class="min-h-screen bg-gray-50">
     <header class="bg-white border-b sticky top-0 z-10">
       <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-        <div class="flex items-center gap-6 min-w-0">
-          <h1 class="text-xl font-bold text-gray-900 whitespace-nowrap">主力风向标</h1>
-          <nav class="flex gap-1 text-sm">
+        <div class="flex items-center gap-4 min-w-0 flex-1">
+          <h1 class="text-xl font-bold text-gray-900 whitespace-nowrap shrink-0">
+            主力风向标
+          </h1>
+          <!-- Phase 2:nav 5 项,移动端横向滚动避免挤压副标题 -->
+          <nav
+            class="flex gap-1 text-sm overflow-x-auto min-w-0 nav-scroll"
+          >
             <RouterLink to="/" class="nav-link">Dashboard</RouterLink>
+            <RouterLink to="/continuity" class="nav-link">Continuity</RouterLink>
+            <RouterLink to="/trends" class="nav-link">Trends</RouterLink>
             <RouterLink to="/holdings" class="nav-link">Holdings</RouterLink>
             <RouterLink to="/settings" class="nav-link">Settings</RouterLink>
           </nav>
         </div>
-        <span class="text-xs text-gray-400 whitespace-nowrap">Phase 5.1 Dashboard</span>
+        <!-- 副标题:< sm (640px) 隐藏,腾位置给 nav,修复移动端挤压 -->
+        <span
+          class="text-xs text-gray-400 whitespace-nowrap shrink-0 hidden sm:inline"
+        >
+          Phase 5.1 Dashboard
+        </span>
       </div>
     </header>
     <main class="max-w-7xl mx-auto px-4 py-6">
@@ -33,5 +45,15 @@ import { RouterLink, RouterView } from 'vue-router'
    "/" 是所有路径的前缀,会被 router-link-active 误判)。 */
 .nav-link.router-link-exact-active {
   @apply bg-blue-50 text-blue-700 font-medium;
+}
+.nav-link {
+  white-space: nowrap;
+}
+/* 移动端 nav 横向滚:隐藏丑陋的滚动条但仍可拖 */
+.nav-scroll {
+  scrollbar-width: none;
+}
+.nav-scroll::-webkit-scrollbar {
+  display: none;
 }
 </style>
