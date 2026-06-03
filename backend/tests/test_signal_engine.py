@@ -12,25 +12,38 @@ from src.models import Fund, Holding, SectorAlias, SectorFlowDaily
 from src.models.enums import SignalType
 from src.services.signal_engine import (
     LOOKBACK_DAYS,
-    ScoreBreakdown,
     SignalEngine,
 )
 
 
-def _add_flow(db_session, sector_code: str, trade_date: date, inflow_wan_x10000: int, change_pct_x10000: int):
-    db_session.add(SectorFlowDaily(
-        trade_date=trade_date,
-        sector_code=sector_code,
-        sector_name="测试板块",
-        sector_type="industry",
-        main_inflow_wan_x10000=inflow_wan_x10000,
-        change_pct_x10000=change_pct_x10000,
-    ))
+def _add_flow(
+    db_session,
+    sector_code: str,
+    trade_date: date,
+    inflow_wan_x10000: int,
+    change_pct_x10000: int,
+):
+    db_session.add(
+        SectorFlowDaily(
+            trade_date=trade_date,
+            sector_code=sector_code,
+            sector_name="测试板块",
+            sector_type="industry",
+            main_inflow_wan_x10000=inflow_wan_x10000,
+            change_pct_x10000=change_pct_x10000,
+        )
+    )
 
 
-def _add_alias(db_session, label: str, code: str | None, name: str | None = None):
+def _add_alias(
+    db_session,
+    label: str,
+    code: str | None,
+    name: str | None = None,
+    confidence: float = 1.0,
+):
     db_session.add(SectorAlias(
-        chinese_label=label, sector_code=code, sector_name=name, confidence=1.0,
+        chinese_label=label, sector_code=code, sector_name=name, confidence=confidence,
     ))
 
 
@@ -104,36 +117,48 @@ def test_continuity_score(flows, expected):
 
 def test_vol_price_align_bullish():
     # 流入扩张 + 价升 → 齐升,2 分
-    score, label = SignalEngine._vol_price_score(today_flow=100, yest_flow=50, today_change_pct_x10000=120)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=100, yest_flow=50, today_change_pct_x10000=120
+    )
     assert (score, label) == (2, "align")
 
 
 def test_vol_price_align_bearish():
     # 流出扩张 + 价跌 → 齐跌,2 分
-    score, label = SignalEngine._vol_price_score(today_flow=-150, yest_flow=-100, today_change_pct_x10000=-200)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=-150, yest_flow=-100, today_change_pct_x10000=-200
+    )
     assert (score, label) == (2, "align")
 
 
 def test_vol_price_divergence_inflow_but_price_down():
     # 流入但价跌 → 背离 1 分
-    score, label = SignalEngine._vol_price_score(today_flow=80, yest_flow=50, today_change_pct_x10000=-100)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=80, yest_flow=50, today_change_pct_x10000=-100
+    )
     assert (score, label) == (1, "divergence")
 
 
 def test_vol_price_divergence_outflow_but_price_up():
     # 流出但价升 → 背离 1 分
-    score, label = SignalEngine._vol_price_score(today_flow=-80, yest_flow=-50, today_change_pct_x10000=140)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=-80, yest_flow=-50, today_change_pct_x10000=140
+    )
     assert (score, label) == (1, "divergence")
 
 
 def test_vol_price_shrink_other():
     # 同向但量缩 → 0 分
-    score, label = SignalEngine._vol_price_score(today_flow=50, yest_flow=100, today_change_pct_x10000=80)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=50, yest_flow=100, today_change_pct_x10000=80
+    )
     assert (score, label) == (0, "other")
 
 
 def test_vol_price_zero_price_other():
-    score, label = SignalEngine._vol_price_score(today_flow=100, yest_flow=50, today_change_pct_x10000=0)
+    score, label = SignalEngine._vol_price_score(
+        today_flow=100, yest_flow=50, today_change_pct_x10000=0
+    )
     assert (score, label) == (0, "other")
 
 
@@ -197,7 +222,7 @@ def test_persistence_bullish_strong_scenario(db_session):
     # 4 天数据,主力流入 80/85/90/95 亿,价 +1.2/+1.5/+1.8/+2.1%
     inflows_yi = [80, 85, 90, 95]
     pcts = [0.012, 0.015, 0.018, 0.021]
-    for i, (yi, p) in enumerate(zip(inflows_yi, pcts)):
+    for i, (yi, p) in enumerate(zip(inflows_yi, pcts, strict=True)):
         d = today - timedelta(days=3 - i)  # 老→新
         _add_flow(db_session, "BK0490", d,
                   int(yi * 10_000 * 10_000), int(p * 10_000))
@@ -221,7 +246,7 @@ def test_persistence_bearish_strong_scenario(db_session):
     today = date(2026, 5, 22)
     outflows_yi = [-120, -130, -140, -150]
     pcts = [-0.015, -0.020, -0.025, -0.030]
-    for i, (yi, p) in enumerate(zip(outflows_yi, pcts)):
+    for i, (yi, p) in enumerate(zip(outflows_yi, pcts, strict=True)):
         d = today - timedelta(days=3 - i)
         _add_flow(db_session, "BK0727", d, int(yi * 10_000 * 10_000), int(p * 10_000))
     db_session.commit()
@@ -305,7 +330,7 @@ def test_fund_summary_picks_strongest_signal(db_session):
     db_session.commit()
 
     e = SignalEngine(db_session)
-    signals = e.generate_signals_for_holdings()  # 空 holdings → 0 signals
+    e.generate_signals_for_holdings()  # 空 holdings → 0 signals
     # 手动算 + 存
     sig = e.calculate_sector_signal("BK1144", "光模块", as_of=today)
     e.save_signals([sig])
@@ -339,6 +364,21 @@ def test_generate_signals_for_holdings_covers_mapped_sectors(db_session):
     signals = e.generate_signals_for_holdings(as_of=today)
     codes = {s.target_code for s in signals}
     assert codes == {"BK1144", "BK0490"}
+
+
+def test_generate_signals_for_holdings_excludes_low_confidence_mapping(db_session):
+    _add_fund(db_session, "F_LOW", "光伏基金", ["光伏"])
+    _add_alias(db_session, "光伏", "BK0429", "光伏设备", confidence=0.6)
+    _add_holding(db_session, "F_LOW")
+    today = date(2026, 5, 22)
+    for i, yi in enumerate([80, 85, 90, 95]):
+        d = today - timedelta(days=3 - i)
+        _add_flow(db_session, "BK0429", d, int(yi * 10_000 * 10_000), 100)
+    db_session.commit()
+
+    signals = SignalEngine(db_session).generate_signals_for_holdings(as_of=today)
+
+    assert signals == []
 
 
 def test_constants_match_spec():

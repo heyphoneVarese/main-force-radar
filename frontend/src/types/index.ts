@@ -257,7 +257,10 @@ export interface HoldingFactsBuckets {
   persistence_ge_20: number       // 连续Top20 ≥20 天
   persistence_5_to_19: number     // 5..19 天
   persistence_lt_5: number        // <5 天(含 0)
-  unmapped: number                // 没匹配到 sector
+  verified: number                // 高置信映射
+  low_confidence: number          // 低置信待确认
+  unmapped: number                // 没有 sector_aliases 映射
+  not_applicable: number          // 无主题或显式无 BK 对应
   total: number
 }
 

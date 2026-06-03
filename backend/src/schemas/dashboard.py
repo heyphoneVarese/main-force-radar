@@ -8,7 +8,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-
 # =====================================================================
 # 数据新鲜度评估(P0 fix)— 防止旧数据伪装成新数据
 # =====================================================================
@@ -442,7 +441,10 @@ class RadarFundItem(BaseModel):
     )
     sector_change_pct: Decimal | None = Field(
         default=None,
-        description="该板块涨跌幅,百分数表示(2.10 = 2.10%,跟 sectors/top 的 fraction 形式不同 — 跟用户的雷达 spec 对齐)"
+        description=(
+            "该板块涨跌幅,百分数表示(2.10 = 2.10%,"
+            "跟 sectors/top 的 fraction 形式不同 — 跟用户的雷达 spec 对齐)"
+        )
     )
     score: int = Field(
         ge=0, le=9,
@@ -782,18 +784,27 @@ class HoldingFactItem(BaseModel):
 
 
 class HoldingFactsBuckets(BaseModel):
-    """顶部统计(PR26)— 按 continuous_top20_days 分四档,**不含**情绪计数。"""
+    """顶部统计(PR26)— 按连续性与映射状态计数,**不含**情绪计数。"""
 
     persistence_ge_20: int = Field(ge=0, description="连续Top20 ≥ 20 天")
     persistence_5_to_19: int = Field(ge=0, description="连续Top20 5..19 天")
     persistence_lt_5: int = Field(
         ge=0,
-        description="连续Top20 < 5 天(含 0 天)"
+            description="连续Top20 < 5 天(含 0 天)"
+    )
+    verified: int = Field(
+        ge=0, description="高置信映射数量"
+    )
+    low_confidence: int = Field(
+        ge=0, description="低置信映射数量;不参与事实计算和排序"
     )
     unmapped: int = Field(
-        ge=0, description="related_sectors 在最新日 sector_flow_daily 没匹配"
+        ge=0, description="related_sectors 没有 sector_aliases 映射"
     )
-    total: int = Field(ge=0, description="= sum 四档")
+    not_applicable: int = Field(
+        ge=0, description="无 related_sectors 或 sector_aliases 显式无 BK 对应"
+    )
+    total: int = Field(ge=0, description="持仓总数;映射状态四档之和应等于 total")
 
 
 class HoldingFactsSummaryResponse(BaseModel):

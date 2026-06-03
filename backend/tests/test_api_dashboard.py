@@ -676,6 +676,27 @@ def test_holdings_summary_mapped_but_no_signal_returns_neutral(db_session, clien
     assert "无 sector_flow" in h["reason"] or "请先采集" in h["reason"]
 
 
+def test_holdings_summary_low_confidence_alias_not_applicable(db_session, client):
+    db_session.add_all([
+        _mk_fund("F_LOW", "光伏基金", related_sectors=["光伏"]),
+        _mk_holding("F_LOW"),
+        _mk_alias_with_conf("光伏", "BK0429", "光伏设备", 0.6),
+        _mk_signal(
+            "BK0429",
+            date(2026, 5, 30),
+            "bullish",
+            persistence_score=8,
+            main_inflow_wan_x10000=12_000_000_000,
+        ),
+    ])
+    db_session.commit()
+
+    h = client.get("/api/dashboard/holdings-summary").json()["holdings"][0]
+    assert h["signal_type"] == "not_applicable"
+    assert h["via_sector"] is None
+    assert h["main_inflow_wan"] is None
+
+
 # ---- 多板块,via_sector 取分最高 ---------------------------------
 
 

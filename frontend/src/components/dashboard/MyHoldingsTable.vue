@@ -114,6 +114,16 @@ function mappingStatusLabel(item: HoldingFactItem): string {
               共 {{ data.buckets.total }} 只 ·
             </span>
             <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-teal-50 text-teal-700 border-teal-200"
+            >
+              高置信 {{ data.buckets.verified }}
+            </span>
+            <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-amber-50 text-amber-700 border-amber-200"
+            >
+              待确认 {{ data.buckets.low_confidence }}
+            </span>
+            <span
               class="px-1.5 py-0.5 rounded border tabular-nums bg-purple-50 text-purple-700 border-purple-200"
             >
               连续Top20 ≥20天 {{ data.buckets.persistence_ge_20 }}
@@ -132,6 +142,11 @@ function mappingStatusLabel(item: HoldingFactItem): string {
               class="px-1.5 py-0.5 rounded border tabular-nums bg-gray-50 text-gray-400 border-gray-100"
             >
               未映射 {{ data.buckets.unmapped }}
+            </span>
+            <span
+              class="px-1.5 py-0.5 rounded border tabular-nums bg-gray-50 text-gray-400 border-gray-100"
+            >
+              不适用 {{ data.buckets.not_applicable }}
             </span>
           </div>
 

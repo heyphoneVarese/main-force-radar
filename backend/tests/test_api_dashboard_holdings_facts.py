@@ -129,7 +129,10 @@ def test_facts_buckets_counts(db_session, client):
     assert b["persistence_ge_20"] == 1
     assert b["persistence_5_to_19"] == 1
     assert b["persistence_lt_5"] == 1
+    assert b["verified"] == 3
+    assert b["low_confidence"] == 0
     assert b["unmapped"] == 1
+    assert b["not_applicable"] == 0
     assert b["total"] == 4
     # buckets 总和 = holdings 长度
     assert b["total"] == len(body["holdings"])
@@ -171,7 +174,8 @@ def test_facts_unmapped_no_related_sectors(db_session, client):
     ])
     db_session.commit()
     body = client.get("/api/dashboard/holdings-facts").json()
-    assert body["buckets"]["unmapped"] == 1
+    assert body["buckets"]["unmapped"] == 0
+    assert body["buckets"]["not_applicable"] == 1
     assert body["holdings"][0]["mapped_sector"] is None
     assert body["holdings"][0]["sector_code"] is None
     assert body["holdings"][0]["mapping_status"] == "not_applicable"
@@ -189,6 +193,8 @@ def test_facts_unmapped_when_related_label_not_in_daily(db_session, client):
     db_session.commit()
     body = client.get("/api/dashboard/holdings-facts").json()
     assert body["buckets"]["unmapped"] == 1
+    assert body["buckets"]["low_confidence"] == 0
+    assert body["buckets"]["not_applicable"] == 0
     assert body["holdings"][0]["mapped_sector"] is None
     assert body["holdings"][0]["mapping_status"] == "unmapped"
 
@@ -206,7 +212,9 @@ def test_facts_low_confidence_mapping_does_not_drive_facts(db_session, client):
 
     body = client.get("/api/dashboard/holdings-facts").json()
     h = body["holdings"][0]
-    assert body["buckets"]["unmapped"] == 1
+    assert body["buckets"]["unmapped"] == 0
+    assert body["buckets"]["low_confidence"] == 1
+    assert body["buckets"]["not_applicable"] == 0
     assert h["mapped_sector"] is None
     assert h["sector_code"] == "BK_PV"
     assert h["sector_name"] == "光伏"
@@ -288,8 +296,11 @@ def test_facts_empty_holdings_zero_buckets(client):
     assert body["trade_date"] is None
     assert body["holdings"] == []
     assert body["buckets"]["total"] == 0
-    for k in ("persistence_ge_20", "persistence_5_to_19",
-              "persistence_lt_5", "unmapped"):
+    for k in (
+        "persistence_ge_20", "persistence_5_to_19",
+        "persistence_lt_5", "verified", "low_confidence",
+        "unmapped", "not_applicable",
+    ):
         assert body["buckets"][k] == 0
 
 

@@ -46,24 +46,12 @@ def get_sectors_for_fund(session: Session, fund_code: str) -> list[str]:
     """返回该基金关联的 eastmoney sector_code 列表。
 
     流程:fund_code → funds.related_sectors(中文标签数组) → sector_aliases
-    → 仅保留 sector_code 不为 NULL 的项 → 返回去重后的 BK 代码列表。
+    → 仅保留 verified 且 sector_code 不为 NULL 的项 → 返回去重后的 BK 代码列表。
 
     无关联 / 无 fund / 标签全部无映射 → 返回空列表。
     """
-    fund = session.get(Fund, fund_code)
-    if fund is None:
-        logger.debug("get_sectors_for_fund: fund %s not found", fund_code)
-        return []
-    labels = fund.related_sectors or []
-    if not labels:
-        return []
-
-    aliases = session.scalars(
-        select(SectorAlias).where(SectorAlias.chinese_label.in_(labels))
-    ).all()
-
-    # 仅返回有 sector_code 的(NULL 表示明确无 BK 对应,如指数/海外)
-    codes = [a.sector_code for a in aliases if a.sector_code]
+    mappings = resolve_fund_sector_mappings(session, fund_code)
+    codes = [m.sector_code for m in mappings if m.eligible_for_sorting]
     # 去重保序
     seen: set[str] = set()
     out: list[str] = []

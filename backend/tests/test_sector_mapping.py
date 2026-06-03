@@ -94,6 +94,14 @@ def test_get_sectors_label_not_in_aliases(db_session):
     assert get_sectors_for_fund(db_session, "008281") == []
 
 
+def test_get_sectors_excludes_low_confidence_aliases(db_session):
+    _add_fund(db_session, "F_LOW", "低置信基金", ["光伏", "半导体"])
+    _add_alias(db_session, "光伏", "BK0429", "光伏设备", conf=0.6)
+    _add_alias(db_session, "半导体", "BK0490", "半导体", conf=1.0)
+
+    assert get_sectors_for_fund(db_session, "F_LOW") == ["BK0490"]
+
+
 # ============ resolve_fund_sector_mappings ============
 
 

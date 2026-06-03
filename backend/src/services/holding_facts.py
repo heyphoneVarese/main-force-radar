@@ -171,7 +171,10 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
                 "persistence_ge_20": 0,
                 "persistence_5_to_19": 0,
                 "persistence_lt_5": 0,
+                "verified": 0,
+                "low_confidence": 0,
                 "unmapped": 0,
+                "not_applicable": 0,
                 "total": 0,
             },
             "holdings": [],
@@ -264,11 +267,24 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
     persistence_ge_20 = 0
     persistence_5_to_19 = 0
     persistence_lt_5 = 0
+    verified = 0
+    low_confidence = 0
     unmapped = 0
+    not_applicable = 0
     for it in items:
+        status = it["mapping_status"]
+        if status == "verified":
+            verified += 1
+        elif status == "low_confidence":
+            low_confidence += 1
+        elif status == "not_applicable":
+            not_applicable += 1
+        else:
+            unmapped += 1
+
         c = it["continuous_top20_days"]
         if c is None:
-            unmapped += 1
+            continue
         elif c >= 20:
             persistence_ge_20 += 1
         elif c >= 5:
@@ -283,7 +299,10 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
             "persistence_ge_20": persistence_ge_20,
             "persistence_5_to_19": persistence_5_to_19,
             "persistence_lt_5": persistence_lt_5,
+            "verified": verified,
+            "low_confidence": low_confidence,
             "unmapped": unmapped,
+            "not_applicable": not_applicable,
             "total": len(items),
         },
         "holdings": items,
