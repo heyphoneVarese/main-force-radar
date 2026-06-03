@@ -5,6 +5,8 @@
 """
 
 import logging
+from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,6 +14,32 @@ from sqlalchemy.orm import Session
 from src.models import Fund, SectorAlias
 
 logger = logging.getLogger(__name__)
+
+HIGH_CONFIDENCE_THRESHOLD = 0.7
+MappingStatus = Literal["verified", "low_confidence", "unmapped", "not_applicable"]
+
+
+@dataclass(frozen=True)
+class FundSectorMapping:
+    """One fund label resolved through sector_aliases.
+
+    status:
+      verified       : has sector_code and confidence >= threshold
+      low_confidence : has sector_code but confidence < threshold
+      not_applicable : alias exists with sector_code NULL
+      unmapped       : label has no alias row, or fund/labels are missing
+    """
+
+    label: str
+    sector_code: str | None
+    sector_name: str | None
+    confidence: float | None
+    status: MappingStatus
+    source: str
+
+    @property
+    def eligible_for_sorting(self) -> bool:
+        return self.status == "verified" and self.sector_code is not None
 
 
 def get_sectors_for_fund(session: Session, fund_code: str) -> list[str]:
@@ -44,6 +72,102 @@ def get_sectors_for_fund(session: Session, fund_code: str) -> list[str]:
             seen.add(c)
             out.append(c)
     return out
+
+
+def resolve_fund_sector_mappings(
+    session: Session,
+    fund_code: str,
+    *,
+    min_confidence: float = HIGH_CONFIDENCE_THRESHOLD,
+) -> list[FundSectorMapping]:
+    """Resolve fund.related_sectors through sector_aliases.
+
+    This is the unified mapping entry for dashboard fund/holding/radar views.
+    Only mappings with status="verified" are allowed to drive ranking.
+    Low-confidence mappings are returned for display/diagnostics, but must not
+    influence "strongest/candidate" sorting.
+    """
+    fund = session.get(Fund, fund_code)
+    if fund is None:
+        logger.debug("resolve_fund_sector_mappings: fund %s not found", fund_code)
+        return [
+            FundSectorMapping(
+                label="",
+                sector_code=None,
+                sector_name=None,
+                confidence=None,
+                status="unmapped",
+                source="fund_missing",
+            )
+        ]
+
+    labels = [str(lbl).strip() for lbl in (fund.related_sectors or []) if str(lbl).strip()]
+    if not labels:
+        return [
+            FundSectorMapping(
+                label="",
+                sector_code=None,
+                sector_name=None,
+                confidence=None,
+                status="not_applicable",
+                source="fund.related_sectors",
+            )
+        ]
+
+    aliases = {
+        a.chinese_label: a
+        for a in session.scalars(
+            select(SectorAlias).where(SectorAlias.chinese_label.in_(labels))
+        )
+    }
+
+    mappings: list[FundSectorMapping] = []
+    for label in labels:
+        alias = aliases.get(label)
+        if alias is None:
+            mappings.append(
+                FundSectorMapping(
+                    label=label,
+                    sector_code=None,
+                    sector_name=None,
+                    confidence=None,
+                    status="unmapped",
+                    source="sector_aliases",
+                )
+            )
+            continue
+
+        if alias.sector_code is None:
+            status: MappingStatus = "not_applicable"
+        elif alias.confidence >= min_confidence:
+            status = "verified"
+        else:
+            status = "low_confidence"
+
+        mappings.append(
+            FundSectorMapping(
+                label=label,
+                sector_code=alias.sector_code,
+                sector_name=alias.sector_name,
+                confidence=alias.confidence,
+                status=status,
+                source="sector_aliases",
+            )
+        )
+
+    return mappings
+
+
+def mapping_status_for_fund(mappings: list[FundSectorMapping]) -> MappingStatus:
+    """Collapse per-label mappings to a single fund-level status."""
+    statuses = {m.status for m in mappings}
+    if "verified" in statuses:
+        return "verified"
+    if "low_confidence" in statuses:
+        return "low_confidence"
+    if statuses and statuses <= {"not_applicable"}:
+        return "not_applicable"
+    return "unmapped"
 
 
 def get_unmapped_labels(session: Session) -> list[str]:

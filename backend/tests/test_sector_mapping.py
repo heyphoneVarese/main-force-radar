@@ -5,6 +5,8 @@ from src.services.sector_mapping import (
     coverage_report,
     get_sectors_for_fund,
     get_unmapped_labels,
+    mapping_status_for_fund,
+    resolve_fund_sector_mappings,
 )
 
 
@@ -90,6 +92,52 @@ def test_get_sectors_empty_related_sectors(db_session):
 def test_get_sectors_label_not_in_aliases(db_session):
     _add_fund(db_session, "008281", "国泰CES", ["未知标签"])
     assert get_sectors_for_fund(db_session, "008281") == []
+
+
+# ============ resolve_fund_sector_mappings ============
+
+
+def test_resolve_mapping_statuses_and_sorting_eligibility(db_session):
+    _add_fund(
+        db_session,
+        "F_THEME",
+        "主题测试基金",
+        ["光伏", "人工智能", "半导体", "通信设备", "CPO"],
+    )
+    _add_alias(db_session, "光伏", "BK0429", "光伏设备", conf=0.6)
+    _add_alias(db_session, "人工智能", "BK0800", "人工智能", conf=0.6)
+    _add_alias(db_session, "半导体", "BK0490", "半导体", conf=1.0)
+    _add_alias(db_session, "通信设备", "BK0736", "通信设备", conf=0.5)
+    _add_alias(db_session, "CPO", "BK1144", "光模块", conf=1.0)
+
+    mappings = resolve_fund_sector_mappings(db_session, "F_THEME")
+    by_label = {m.label: m for m in mappings}
+
+    assert by_label["光伏"].status == "low_confidence"
+    assert by_label["人工智能"].status == "low_confidence"
+    assert by_label["半导体"].status == "verified"
+    assert by_label["通信设备"].status == "low_confidence"
+    assert by_label["CPO"].status == "verified"
+    assert by_label["半导体"].eligible_for_sorting is True
+    assert by_label["CPO"].eligible_for_sorting is True
+    assert by_label["光伏"].eligible_for_sorting is False
+    assert mapping_status_for_fund(mappings) == "verified"
+
+
+def test_resolve_mapping_distinguishes_unmapped_low_confidence_not_applicable(
+    db_session,
+):
+    _add_fund(db_session, "F_MIXED", "混合测试基金", ["低置信", "海外", "未知"])
+    _add_alias(db_session, "低置信", "BK_LOW", "低置信", conf=0.5)
+    _add_alias(db_session, "海外", None, conf=0.0)
+
+    mappings = resolve_fund_sector_mappings(db_session, "F_MIXED")
+    by_label = {m.label: m for m in mappings}
+
+    assert by_label["低置信"].status == "low_confidence"
+    assert by_label["海外"].status == "not_applicable"
+    assert by_label["未知"].status == "unmapped"
+    assert mapping_status_for_fund(mappings) == "low_confidence"
 
 
 # ============ get_unmapped_labels ============

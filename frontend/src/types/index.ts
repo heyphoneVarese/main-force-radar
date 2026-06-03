@@ -237,6 +237,9 @@ export interface HoldingFactItem {
   mapped_sector: string | null
   sector_code: string | null
   sector_name: string | null
+  mapping_status: 'verified' | 'low_confidence' | 'unmapped' | 'not_applicable'
+  mapping_confidence: number | null
+  mapping_source: string | null
   purity_score: number | null
 
   continuous_top20_days: number | null
@@ -301,6 +304,11 @@ export interface TopFund {
   fund_name: string
   related_sectors: string[]
   matched_sectors: MatchedSector[]
+  via_sector_code: string
+  via_sector_name: string
+  mapping_confidence: number
+  mapping_status: 'verified' | 'low_confidence' | 'unmapped' | 'not_applicable'
+  mapping_source: string
   score: number                      // 0-9 持续性
   main_inflow_wan: string            // Decimal 万元
   change_pct: string | null

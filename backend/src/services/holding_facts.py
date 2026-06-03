@@ -34,13 +34,18 @@ from sqlalchemy.orm import Session
 
 from src.models import Fund, Holding, IntradaySectorFlow, SectorFlowDaily
 from src.services.radar import _compute_purity_score
+from src.services.sector_mapping import (
+    FundSectorMapping,
+    mapping_status_for_fund,
+    resolve_fund_sector_mappings,
+)
 from src.services.sector_persistence import _compute_facts, _load_context
 
 
 def _build_latest_sector_lookup(
     ctx: dict[str, Any] | None,
 ) -> tuple[dict[str, SectorFlowDaily], dict[str, int]]:
-    """{sector_name: latest_row} + {sector_name: rank_within_own_sector_type}。
+    """{sector_code: latest_row} + {sector_code: rank_within_own_sector_type}。
 
     多个 sector_type 同名时优先 industry。rank 按 (sector_type, latest_date)
     内 inflow DESC 计算 — 给 _compute_facts 用。
@@ -60,29 +65,15 @@ def _build_latest_sector_lookup(
         for i, r in enumerate(group, start=1):
             rank_by_code[r.sector_code] = i
 
-    name_to_row: dict[str, SectorFlowDaily] = {}
-    # 同名优先 industry → 先扫 industry,再扫其它(只在没有时填充)
-    for stype in ("industry", "concept", "region"):
-        for r in by_type.get(stype, []):
-            key = (r.sector_name or "").strip()
-            if key and key not in name_to_row:
-                name_to_row[key] = r
-    # 兜底:剩下的其它 sector_type
-    for stype, group in by_type.items():
-        if stype in ("industry", "concept", "region"):
-            continue
-        for r in group:
-            key = (r.sector_name or "").strip()
-            if key and key not in name_to_row:
-                name_to_row[key] = r
+    code_to_row = {r.sector_code: r for r in latest_rows}
 
-    return name_to_row, rank_by_code
+    return code_to_row, rank_by_code
 
 
 def _load_intraday_industry_by_name(
     session: Session,
 ) -> tuple[Any, dict[str, IntradaySectorFlow]]:
-    """最新 snapshot industry 行,按 sector_name 索引(同名重复保留首条)。"""
+    """最新 snapshot industry 行,按 sector_code 索引。"""
     latest = session.scalar(
         select(IntradaySectorFlow.snapshot_time)
         .order_by(IntradaySectorFlow.snapshot_time.desc())
@@ -90,16 +81,44 @@ def _load_intraday_industry_by_name(
     )
     if latest is None:
         return None, {}
-    by_name: dict[str, IntradaySectorFlow] = {}
+    by_code: dict[str, IntradaySectorFlow] = {}
     for r in session.scalars(
         select(IntradaySectorFlow)
         .where(IntradaySectorFlow.snapshot_time == latest)
         .where(IntradaySectorFlow.sector_type == "industry")
     ):
-        key = (r.sector_name or "").strip()
-        if key and key not in by_name:
-            by_name[key] = r
-    return latest, by_name
+        if r.sector_code and r.sector_code not in by_code:
+            by_code[r.sector_code] = r
+    return latest, by_code
+
+
+def _empty_item(
+    *,
+    fund_code: str,
+    fund_name: str,
+    related: list[str],
+    mapping_status: str,
+    mapping: FundSectorMapping | None = None,
+) -> dict[str, Any]:
+    return {
+        "fund_code": fund_code,
+        "fund_name": fund_name,
+        "related_sectors": related,
+        "mapped_sector": None,
+        "sector_code": mapping.sector_code if mapping else None,
+        "sector_name": mapping.sector_name if mapping else None,
+        "mapping_status": mapping_status,
+        "mapping_confidence": mapping.confidence if mapping else None,
+        "mapping_source": mapping.source if mapping else None,
+        "purity_score": None,
+        "continuous_top20_days": None,
+        "last_20_top20_days": None,
+        "last_20_inflow_days": None,
+        "latest_main_inflow_wan_x10000": None,
+        "change_pct_x10000": None,
+        "intraday_main_inflow_wan_x10000": None,
+        "intraday_change_pct_x10000": None,
+    }
 
 
 def build_holding_facts(session: Session) -> dict[str, Any]:
@@ -159,8 +178,8 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
         }
 
     ctx = _load_context(session)
-    name_to_row, rank_by_code = _build_latest_sector_lookup(ctx)
-    latest_snap, intraday_by_name = _load_intraday_industry_by_name(session)
+    code_to_row, rank_by_code = _build_latest_sector_lookup(ctx)
+    latest_snap, intraday_by_code = _load_intraday_industry_by_name(session)
 
     items: list[dict[str, Any]] = []
     for h in holdings:
@@ -171,23 +190,25 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
             if fund and fund.related_sectors else []
         )
 
-        # 找匹配 sector:遍历 related,在 latest daily 里查 sector_name 精确匹配
-        best: tuple[str, SectorFlowDaily, dict[str, Any]] | None = None
+        mappings = resolve_fund_sector_mappings(session, h.fund_code)
+        fund_mapping_status = mapping_status_for_fund(mappings)
+
+        # 找匹配 sector:只允许高置信 verified mapping 进入事实计算。
+        best: tuple[FundSectorMapping, SectorFlowDaily, dict[str, Any]] | None = None
         if ctx is not None:
-            candidates: list[tuple[str, SectorFlowDaily, dict[str, Any]]] = []
+            candidates: list[tuple[FundSectorMapping, SectorFlowDaily, dict[str, Any]]] = []
             seen_codes: set[str] = set()
-            for label in related:
-                lk = (label or "").strip()
-                if not lk:
+            for mapping in mappings:
+                if not mapping.eligible_for_sorting or mapping.sector_code is None:
                     continue
-                daily_row = name_to_row.get(lk)
+                daily_row = code_to_row.get(mapping.sector_code)
                 if daily_row is None or daily_row.sector_code in seen_codes:
                     continue
                 seen_codes.add(daily_row.sector_code)
                 facts = _compute_facts(
                     ctx, daily_row, rank_by_code[daily_row.sector_code]
                 )
-                candidates.append((lk, daily_row, facts))
+                candidates.append((mapping, daily_row, facts))
             if candidates:
                 # 选 continuous_top20 DESC → 最新 inflow DESC → sector_code ASC
                 candidates.sort(key=lambda c: (
@@ -198,26 +219,22 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
                 best = candidates[0]
 
         if best is None:
-            items.append({
-                "fund_code": h.fund_code,
-                "fund_name": fund_name,
-                "related_sectors": related,
-                "mapped_sector": None,
-                "sector_code": None,
-                "sector_name": None,
-                "purity_score": None,
-                "continuous_top20_days": None,
-                "last_20_top20_days": None,
-                "last_20_inflow_days": None,
-                "latest_main_inflow_wan_x10000": None,
-                "change_pct_x10000": None,
-                "intraday_main_inflow_wan_x10000": None,
-                "intraday_change_pct_x10000": None,
-            })
+            display_mapping = next(
+                (m for m in mappings if m.status == fund_mapping_status),
+                None,
+            )
+            items.append(_empty_item(
+                fund_code=h.fund_code,
+                fund_name=fund_name,
+                related=related,
+                mapping_status=fund_mapping_status,
+                mapping=display_mapping,
+            ))
             continue
 
-        matched_name, daily_row, facts = best
-        intraday = intraday_by_name.get(matched_name)
+        mapping, daily_row, facts = best
+        intraday = intraday_by_code.get(daily_row.sector_code)
+        matched_name = mapping.label
         purity = _compute_purity_score(related, matched_name, fund_name)
         items.append({
             "fund_code": h.fund_code,
@@ -226,6 +243,9 @@ def build_holding_facts(session: Session) -> dict[str, Any]:
             "mapped_sector": matched_name,
             "sector_code": daily_row.sector_code,
             "sector_name": daily_row.sector_name,
+            "mapping_status": mapping.status,
+            "mapping_confidence": mapping.confidence,
+            "mapping_source": mapping.source,
             "purity_score": purity,
             "continuous_top20_days": facts["continuous_top20_days"],
             "last_20_top20_days": facts["last_20_top20_days"],

@@ -8,8 +8,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.models import Fund, Holding, IntradaySectorFlow, SectorFlowDaily
-
+from src.models import Fund, Holding, IntradaySectorFlow, SectorAlias, SectorFlowDaily
 
 # =====================================================================
 # 辅助构造
@@ -48,6 +47,20 @@ def _mk_holding(code: str) -> Holding:
     )
 
 
+def _mk_alias(
+    label: str,
+    code: str,
+    name: str | None = None,
+    confidence: float = 1.0,
+) -> SectorAlias:
+    return SectorAlias(
+        chinese_label=label,
+        sector_code=code,
+        sector_name=name or label,
+        confidence=confidence,
+    )
+
+
 # =====================================================================
 # 1. 空 intraday
 # =====================================================================
@@ -73,6 +86,7 @@ def test_radar_uses_only_latest_snapshot(db_session, client):
     db_session.add_all([
         _mk_intraday("BK0001", "半导体", s_old, 999_999_999_999),  # old 巨大但被忽略
         _mk_intraday("BK0001", "半导体", s_new, 100_000_000_000),  # new 10亿
+        _mk_alias("半导体", "BK0001", "半导体"),
         _mk_fund("F01", "半导体基金", ["半导体"]),
     ])
     db_session.commit()
@@ -96,6 +110,7 @@ def test_radar_ignores_concept_sectors(db_session, client):
     db_session.add_all([
         # concept 板块名也叫"半导体" 但 type=concept
         _mk_intraday("BK_C", "半导体", s, 500_000_000_000, sector_type="concept"),
+        _mk_alias("半导体", "BK_C", "半导体"),
         _mk_fund("F_X", "半导体基金", ["半导体"]),
     ])
     db_session.commit()
@@ -116,6 +131,7 @@ def seed_three_funds_one_sector(db_session):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK0490", "半导体", s, 950_000_000_000, change_pct_x10000=210),
+        _mk_alias("半导体", "BK0490", "半导体"),
         # F_HELD 在 holdings → holdings 区
         _mk_fund("F_HELD", "持有的半导体基金", ["半导体"]),
         _mk_holding("F_HELD"),
@@ -145,6 +161,7 @@ def test_radar_exact_match_only_not_substring(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_A", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_A", "半导体"),
         # F1 标签"半导体"精确命中
         _mk_fund("F_EXACT", "F1", ["半导体"]),
         # F2 标签"半导体设备" — 名字含"半导体"但不等于,不匹配
@@ -161,6 +178,7 @@ def test_radar_strips_whitespace_on_match(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_A", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_A", "半导体"),
         _mk_fund("F_PAD", "F", ["  半导体  "]),
     ])
     db_session.commit()
@@ -180,6 +198,9 @@ def test_radar_picks_strongest_matched_sector(db_session, client):
         _mk_intraday("BK_AI", "AI算力", s, 8_000_000_000_000),       # 80 亿
         _mk_intraday("BK_SEMI", "半导体", s, 12_000_000_000_000),     # 120 亿
         _mk_intraday("BK_CONS", "消费", s, 3_000_000_000_000),       # 30 亿
+        _mk_alias("AI算力", "BK_AI", "AI算力"),
+        _mk_alias("半导体", "BK_SEMI", "半导体"),
+        _mk_alias("消费", "BK_CONS", "消费"),
         _mk_fund("F_MULTI", "三标签基金", ["AI算力", "半导体", "消费"]),
     ])
     db_session.commit()
@@ -227,6 +248,8 @@ def test_radar_sort_by_score_desc_then_rank_asc(db_session, client):
         _mk_intraday("BK_R1", "板A", s, 12_000_000_000_000),   # rank 1, 120亿, rank_score=5 +4=9
         _mk_intraday("BK_R2", "板B", s, 1_000_000_000_000),    # rank 2, 10亿, rank_score=4 +1=5
         _mk_intraday("BK_R3", "板C", s, 1_500_000_000_000),    # 排在中:15亿
+        _mk_alias("板A", "BK_R1", "板A"),
+        _mk_alias("板B", "BK_R2", "板B"),
         # 等等,顺序需重排;后端会按 inflow 重排,与我手填顺序无关
         _mk_fund("F_A", "F_A", ["板A"]),
         _mk_fund("F_B", "F_B", ["板B"]),
@@ -242,6 +265,7 @@ def test_radar_sort_by_score_desc_then_rank_asc(db_session, client):
 def test_radar_n_param_limits_per_section(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add(_mk_intraday("BK_X", "半导体", s, 12_000_000_000_000))
+    db_session.add(_mk_alias("半导体", "BK_X", "半导体"))
     # 5 个不同 fund 都命中半导体
     for i in range(5):
         db_session.add(_mk_fund(f"F{i:03d}", f"基金 {i}", ["半导体"]))
@@ -270,6 +294,7 @@ def test_radar_unmatched_fund_not_in_response(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("新能源车", "BK_Y", "新能源车"),
         _mk_fund("F_UNMATCHED", "其他主题", ["新能源车"]),  # 不命中
     ])
     db_session.commit()
@@ -331,6 +356,7 @@ def test_radar_null_change_pct_preserved(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000, change_pct_x10000=None),
+        _mk_alias("半导体", "BK_X", "半导体"),
         _mk_fund("F", "F", ["半导体"]),
     ])
     db_session.commit()
@@ -358,6 +384,7 @@ def test_purity_single_related_sector_returns_9(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
         _mk_fund("F_PURE1", "测试基金", ["半导体"]),
     ])
     db_session.commit()
@@ -371,6 +398,8 @@ def test_purity_two_related_sectors_returns_8(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
+        _mk_alias("AI算力", "BK_AI", "AI算力"),
         _mk_fund("F_PURE2", "测试基金", ["半导体", "AI算力"]),
     ])
     db_session.commit()
@@ -384,6 +413,9 @@ def test_purity_three_related_sectors_returns_7(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
+        _mk_alias("AI算力", "BK_AI", "AI算力"),
+        _mk_alias("新能源车", "BK_NEW", "新能源车"),
         _mk_fund("F_PURE3", "测试基金", ["半导体", "AI算力", "新能源车"]),
     ])
     db_session.commit()
@@ -397,6 +429,11 @@ def test_purity_four_or_more_related_sectors_returns_6(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
+        _mk_alias("AI算力", "BK_AI", "AI算力"),
+        _mk_alias("新能源车", "BK_NEW", "新能源车"),
+        _mk_alias("消费", "BK_CONS", "消费"),
+        _mk_alias("黄金", "BK_GOLD", "黄金"),
         _mk_fund("F_PURE4", "测试基金",
                  ["半导体", "AI算力", "新能源车", "消费", "黄金"]),
     ])
@@ -411,6 +448,8 @@ def test_purity_fund_name_contains_matched_adds_bonus(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
+        _mk_alias("通信设备", "BK_COMM", "通信设备"),
         _mk_fund("F_NAMED", "国泰半导体行业ETF", ["半导体", "通信设备"]),
     ])
     db_session.commit()
@@ -425,6 +464,7 @@ def test_purity_theme_synonym_in_name_adds_bonus(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
         _mk_fund("F_SYN", "华夏国证芯片ETF", ["半导体"]),
     ])
     db_session.commit()
@@ -438,6 +478,7 @@ def test_purity_cap_at_9_never_exceeds(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
         # base 9 + rule5(半导体在名字)+ rule6(芯片同主题)= 11 → cap 9
         _mk_fund("F_CAP", "国泰半导体芯片ETF联接A", ["半导体"]),
     ])
@@ -452,6 +493,11 @@ def test_purity_high_ranks_before_low_within_same_score(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 12_000_000_000_000),  # 120 亿,rank 1,score 9
+        _mk_alias("半导体", "BK_X", "半导体"),
+        _mk_alias("AI", "BK_AI", "AI"),
+        _mk_alias("消费", "BK_CONS", "消费"),
+        _mk_alias("白酒", "BK_BAIJIU", "白酒"),
+        _mk_alias("黄金", "BK_GOLD", "黄金"),
         # F_LOW:base 6(5 related),无 bonus = 6
         _mk_fund("F_LOW", "万家成长", ["半导体", "AI", "消费", "白酒", "黄金"]),
         # F_HIGH:base 9(单 related)+ rule5 + rule6 = 9
@@ -470,6 +516,7 @@ def test_purity_holdings_and_candidates_both_carry_field(
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
         _mk_fund("F_HELD", "F1", ["半导体"]),
         _mk_holding("F_HELD"),
         _mk_fund("F_CAND", "F2", ["半导体"]),
@@ -499,6 +546,8 @@ def test_purity_sort_tertiary_sector_rank(db_session, client):
     db_session.add_all([
         _mk_intraday("BK_A", "板块A", s, 10_000_000_000_000),   # 100 亿 → rank 1
         _mk_intraday("BK_B", "板块B", s, 9_000_000_000_000),     # 90 亿  → rank 2
+        _mk_alias("板块A", "BK_A", "板块A"),
+        _mk_alias("板块B", "BK_B", "板块B"),
         _mk_fund("F_A", "FA", ["板块A"]),
         _mk_fund("F_B", "FB", ["板块B"]),
     ])
@@ -513,6 +562,7 @@ def test_purity_sort_quaternary_fund_code(db_session, client):
     s = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("BK_X", "半导体", s, 100_000_000_000),
+        _mk_alias("半导体", "BK_X", "半导体"),
         _mk_fund("ZZZ001", "FZ", ["半导体"]),
         _mk_fund("AAA001", "FA", ["半导体"]),
         _mk_fund("MMM001", "FM", ["半导体"]),

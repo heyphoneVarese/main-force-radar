@@ -30,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models import Fund, SectorFlowDaily
-from src.services.sector_mapping import get_sectors_for_fund
+from src.services.sector_mapping import resolve_fund_sector_mappings
 from src.services.signal_engine import SignalEngine
 
 
@@ -89,7 +89,11 @@ def build_top_funds(
     candidates: list[dict[str, Any]] = []
 
     for fund in session.scalars(select(Fund)):
-        bk_codes = get_sectors_for_fund(session, fund.fund_code)
+        mappings = resolve_fund_sector_mappings(session, fund.fund_code)
+        verified_by_code = {
+            m.sector_code: m for m in mappings if m.eligible_for_sorting
+        }
+        bk_codes = list(verified_by_code)
         matched_flows = [
             (code, flows_by_code[code]) for code in bk_codes if code in flows_by_code
         ]
@@ -101,6 +105,7 @@ def build_top_funds(
         via_code, via_flow = max(
             matched_flows, key=lambda p: p[1].main_inflow_wan_x10000
         )
+        via_mapping = verified_by_code[via_code]
         sb = engine.calculate_persistence_score(via_code, as_of=latest_date)
 
         flow_yi = via_flow.main_inflow_wan_x10000 / 10_000 / 10_000
@@ -122,6 +127,9 @@ def build_top_funds(
             ],
             "via_sector_code": via_code,
             "via_sector_name": via_flow.sector_name,
+            "mapping_confidence": via_mapping.confidence,
+            "mapping_status": via_mapping.status,
+            "mapping_source": via_mapping.source,
             "score": sb.total,
             "main_inflow_wan_x10000": via_flow.main_inflow_wan_x10000,
             "change_pct_x10000": via_flow.change_pct_x10000,

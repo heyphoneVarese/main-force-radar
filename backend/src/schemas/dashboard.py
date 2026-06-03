@@ -191,6 +191,22 @@ class TopFundResponse(BaseModel):
     matched_sectors: list[MatchedSector] = Field(
         description="当日有 sector_flow 数据的 mapped BK 板块;可能 1..N 条"
     )
+    via_sector_code: str = Field(
+        description="决定排序的高置信映射 BK code"
+    )
+    via_sector_name: str = Field(
+        description="决定排序的高置信映射板块名"
+    )
+    mapping_confidence: float = Field(
+        ge=0.0, le=1.0,
+        description="via_sector 对应 sector_aliases.confidence"
+    )
+    mapping_status: str = Field(
+        description="verified / low_confidence / unmapped / not_applicable"
+    )
+    mapping_source: str = Field(
+        description="映射来源,当前为 sector_aliases"
+    )
     score: int = Field(
         ge=0, le=9,
         description="via_sector 的 SignalEngine 持续性总分(基础 0-4 + 连续 0-3 + 量价 0-2)"
@@ -721,6 +737,17 @@ class HoldingFactItem(BaseModel):
         default=None,
         description="mapped_sector 对应 sector_flow_daily 行的 sector_name"
                     "(语义同 mapped_sector;同名 industry 优先)"
+    )
+    mapping_status: str = Field(
+        description="verified / low_confidence / unmapped / not_applicable"
+    )
+    mapping_confidence: float | None = Field(
+        default=None,
+        description="mapped_sector 对应 sector_aliases.confidence;无可用映射时 null"
+    )
+    mapping_source: str | None = Field(
+        default=None,
+        description="映射来源;无可用映射时 null"
     )
     purity_score: int | None = Field(
         default=None, ge=0, le=9,

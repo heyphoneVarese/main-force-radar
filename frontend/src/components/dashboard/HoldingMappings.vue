@@ -22,8 +22,7 @@ import type { TopFund, TopFunds } from '../../types'
 //   移除 — reason(信息已被 score chip + net inflow 覆盖)
 //
 // 板块 rank 来源:Dashboard.vue 用 sectors/top?sector_type=all&n=100
-// 单独拉一次,建 code→rank 映射传进来。via_sector 计算 = matched_sectors
-// 中 rank 最小(全局最强)的那个。fallback 到列表首项 + 无 rank。
+// 单独拉一次,建 code→rank 映射传进来。via_sector 直接使用后端显式字段。
 
 const props = defineProps<{
   status: 'loading' | 'ready' | 'error'
@@ -38,27 +37,16 @@ const filteredFunds = computed<TopFund[]>(() => {
   return props.data.funds.filter((f) => props.holdingCodes.has(f.fund_code))
 })
 
-// 在 matched_sectors 中找全局 rank 最小的(= 主力流入最大的)→ via_sector
 function viaSector(f: TopFund): {
   code: string
   name: string
   rank: number | null
-} | null {
-  if (f.matched_sectors.length === 0) return null
-  let best = f.matched_sectors[0]
-  let bestRank = props.sectorRankByCode.get(best.sector_code) ?? Infinity
-  for (let i = 1; i < f.matched_sectors.length; i++) {
-    const s = f.matched_sectors[i]
-    const r = props.sectorRankByCode.get(s.sector_code) ?? Infinity
-    if (r < bestRank) {
-      bestRank = r
-      best = s
-    }
-  }
+} {
+  const rank = props.sectorRankByCode.get(f.via_sector_code) ?? null
   return {
-    code: best.sector_code,
-    name: best.sector_name,
-    rank: bestRank === Infinity ? null : bestRank,
+    code: f.via_sector_code,
+    name: f.via_sector_name,
+    rank,
   }
 }
 
@@ -123,10 +111,10 @@ function scoreChipClass(score: number): string {
                 <!-- 板块 rank 前缀 -->
                 <span
                   class="text-xs text-gray-400 tabular-nums shrink-0 pt-1 w-14 text-right"
-                  :title="viaSector(f)?.code"
+                  :title="viaSector(f).code"
                 >
-                  <template v-if="viaSector(f)?.rank">
-                    板块 #{{ viaSector(f)!.rank }}
+                  <template v-if="viaSector(f).rank">
+                    板块 #{{ viaSector(f).rank }}
                   </template>
                   <template v-else>—</template>
                 </span>
@@ -157,7 +145,7 @@ function scoreChipClass(score: number): string {
                   <div class="text-xs text-gray-500 mt-1">
                     via
                     <span class="text-gray-700 font-medium">
-                      {{ viaSector(f)?.name ?? '—' }}
+                      {{ viaSector(f).name }}
                     </span>
                   </div>
 

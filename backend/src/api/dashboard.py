@@ -725,6 +725,9 @@ def _to_holding_fact_item(d: dict[str, Any]) -> HoldingFactItem:
         mapped_sector=d["mapped_sector"],
         sector_code=d["sector_code"],
         sector_name=d["sector_name"],
+        mapping_status=d["mapping_status"],
+        mapping_confidence=d["mapping_confidence"],
+        mapping_source=d["mapping_source"],
         purity_score=d["purity_score"],
         continuous_top20_days=d["continuous_top20_days"],
         last_20_top20_days=d["last_20_top20_days"],
@@ -802,6 +805,11 @@ def get_top_funds(
                 )
                 for m in f["matched_sectors"]
             ],
+            via_sector_code=f["via_sector_code"],
+            via_sector_name=f["via_sector_name"],
+            mapping_confidence=f["mapping_confidence"],
+            mapping_status=f["mapping_status"],
+            mapping_source=f["mapping_source"],
             score=f["score"],
             main_inflow_wan=int_to_wan_yuan(f["main_inflow_wan_x10000"]),
             change_pct=(

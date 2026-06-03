@@ -39,6 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models import Fund, Holding, IntradaySectorFlow
+from src.services.sector_mapping import resolve_fund_sector_mappings
 
 
 def _rank_score(rank: int) -> int:
@@ -223,22 +224,21 @@ def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
         .order_by(IntradaySectorFlow.main_inflow_wan_x10000.desc())
     ))
 
-    # 3. sector_name(strip)→ (rank, IntradaySectorFlow 行)
-    sector_by_name: dict[str, tuple[int, IntradaySectorFlow]] = {}
+    # 3. sector_code → (rank, IntradaySectorFlow 行)
+    sector_by_code: dict[str, tuple[int, IntradaySectorFlow]] = {}
     for rank, s in enumerate(sector_rows, start=1):
-        key = (s.sector_name or "").strip()
+        key = (s.sector_code or "").strip()
         if not key:
             continue
-        # 同名不同 code 罕见;保留首个(rank 最小)
-        if key not in sector_by_name:
-            sector_by_name[key] = (rank, s)
+        if key not in sector_by_code:
+            sector_by_code[key] = (rank, s)
 
     # 4. 持仓 fund_code 集合,O(1) 判 badge
     holding_codes: set[str] = set(
         session.scalars(select(Holding.fund_code)).all()
     )
 
-    # 5. 遍历 funds,精确匹配 related_sectors → sector_name
+    # 5. 遍历 funds,统一走 sector_aliases 高置信映射 → sector_code
     holdings_items: list[dict[str, Any]] = []
     candidates_items: list[dict[str, Any]] = []
 
@@ -249,16 +249,15 @@ def build_intraday_radar(session: Session, *, n: int = 20) -> dict[str, Any]:
 
         # 多个命中,取 rank 最小(最强板块)
         best: tuple[int, IntradaySectorFlow, str] | None = None
-        for label in related:
-            label_clean = (label or "").strip()
-            if not label_clean:
+        for mapping in resolve_fund_sector_mappings(session, fund.fund_code):
+            if not mapping.eligible_for_sorting or mapping.sector_code is None:
                 continue
-            hit = sector_by_name.get(label_clean)
+            hit = sector_by_code.get(mapping.sector_code)
             if hit is None:
                 continue
             rank, sector_row = hit
             if best is None or rank < best[0]:
-                best = (rank, sector_row, label_clean)
+                best = (rank, sector_row, mapping.label)
 
         if best is None:
             continue

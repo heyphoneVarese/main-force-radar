@@ -507,6 +507,20 @@ def _mk_alias(label: str, sector_code: str | None, sector_name: str) -> SectorAl
     )
 
 
+def _mk_alias_with_conf(
+    label: str,
+    sector_code: str | None,
+    sector_name: str,
+    confidence: float,
+) -> SectorAlias:
+    return SectorAlias(
+        chinese_label=label,
+        sector_code=sector_code,
+        sector_name=sector_name,
+        confidence=confidence,
+    )
+
+
 def _mk_signal(
     sector_code: str,
     trade_date: date,
@@ -946,6 +960,34 @@ def test_funds_top_decimal_decoding(client, seed_top_funds):
     assert Decimal(top["main_inflow_wan"]) == Decimal("1200000")
     # 312 / 10000 = 0.0312
     assert Decimal(top["change_pct"]) == Decimal("0.0312")
+
+
+def test_funds_top_returns_explicit_mapping_fields(client, seed_top_funds):
+    body = client.get("/api/dashboard/funds/top").json()
+    top = body["funds"][0]
+    assert top["via_sector_code"] == "BK0727"
+    assert top["via_sector_name"] == "半导体"
+    assert top["mapping_confidence"] == 1.0
+    assert top["mapping_status"] == "verified"
+    assert top["mapping_source"] == "sector_aliases"
+
+
+def test_funds_top_excludes_low_confidence_mapping_from_ranking(
+    db_session, client
+):
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_LOW", "光伏基金", related_sectors=["光伏"]),
+        _mk_fund("F_OK", "半导体基金", related_sectors=["半导体"]),
+        _mk_alias_with_conf("光伏", "BK0429", "光伏设备", 0.6),
+        _mk_alias("半导体", "BK0727", "半导体"),
+        _mk_flow_row("BK0429", "光伏设备", d, 100_000_000_000),
+        _mk_flow_row("BK0727", "半导体", d, 1_000_000_000),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/funds/top").json()
+    assert [f["fund_code"] for f in body["funds"]] == ["F_OK"]
 
 
 # ---- 多板块基金:via 取 max,matched_sectors 全列 ---------------

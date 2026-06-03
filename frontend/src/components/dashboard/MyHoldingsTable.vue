@@ -72,6 +72,12 @@ function visibleSectorChips(item: HoldingFactItem): string[] {
 function extraSectorCount(item: HoldingFactItem): number {
   return Math.max(0, item.related_sectors.length - 3)
 }
+
+function mappingStatusLabel(item: HoldingFactItem): string {
+  if (item.mapping_status === 'low_confidence') return '待确认'
+  if (item.mapping_status === 'not_applicable') return '不适用'
+  return '未映射'
+}
 </script>
 
 <template>
@@ -170,7 +176,7 @@ function extraSectorCount(item: HoldingFactItem): number {
                   v-if="h.mapped_sector === null"
                   class="text-[10px] text-gray-400 ml-auto"
                 >
-                  未映射
+                  {{ mappingStatusLabel(h) }}
                 </span>
               </div>
 
@@ -293,7 +299,7 @@ function extraSectorCount(item: HoldingFactItem): number {
                       v-else
                       class="text-xs text-gray-400 italic"
                     >
-                      未映射
+                      {{ mappingStatusLabel(h) }}
                     </span>
                   </td>
                   <td class="px-2 text-right whitespace-nowrap text-xs tabular-nums text-gray-700">

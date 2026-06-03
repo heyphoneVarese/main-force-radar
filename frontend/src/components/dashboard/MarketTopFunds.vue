@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { TopFund, TopFunds } from '../../types'
+import type { TopFunds } from '../../types'
 
-// 最强 20 基金候选(Phase 5.1 PR12)。
+// 主线关联基金候选(Phase 5.1 PR12)。
 //
 // 跟 HoldingMappings 的区别(关键!):
 //   - 数据源都是 GET /api/dashboard/funds/top(默认 n=20)
@@ -13,23 +13,12 @@ import type { TopFund, TopFunds } from '../../types'
 //   排序键是 "基金所映射板块的主力净流入",不是基金本身的净值涨幅。
 //   change_pct 字段属于板块,不是基金 — 本组件**故意不显示**它。
 //
-// via_sector 名取自 reason 文本(backend 固定输出 "via {name} ({code}): ..."
-// 格式)。这样不必引入额外 sectorRankByCode prop 来识别 via_sector,
-// 跟 HoldingMappings 的实现解耦。matched_sectors[0] 作 fallback。
-
 const props = defineProps<{
   status: 'loading' | 'ready' | 'error'
   data: TopFunds | null
   error: string
   holdingCodes: Set<string>
 }>()
-
-function viaSectorName(f: TopFund): string {
-  // Backend reason 模板:`via {sector_name} ({sector_code}): ...`
-  const m = /^via (.+?) \(/.exec(f.reason)
-  if (m) return m[1]
-  return f.matched_sectors[0]?.sector_name ?? '—'
-}
 
 function isHeld(code: string): boolean {
   return props.holdingCodes.has(code)
@@ -63,7 +52,7 @@ function scoreChipClass(score: number): string {
       <div class="flex items-center justify-between">
         <h3 class="text-base font-semibold text-gray-900 flex items-center gap-2">
           <span class="inline-block w-1.5 h-4 bg-amber-500 rounded-sm"></span>
-          最强 20 基金候选
+          主线关联基金候选
         </h3>
         <span
           v-if="status === 'ready' && data?.trade_date"
@@ -73,7 +62,7 @@ function scoreChipClass(score: number): string {
         </span>
       </div>
       <p class="text-xs text-gray-500 mt-1">
-        按主力板块强度筛选 · 非基金净值涨幅排名
+        按高置信主题映射与板块资金排序，非基金净值涨幅排名
       </p>
     </header>
 
@@ -133,7 +122,7 @@ function scoreChipClass(score: number): string {
                     <span class="text-gray-300 mx-1.5">·</span>
                     via
                     <span class="text-gray-700 font-medium">
-                      {{ viaSectorName(f) }}
+                      {{ f.via_sector_name }}
                     </span>
                   </div>
 

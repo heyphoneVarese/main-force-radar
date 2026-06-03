@@ -25,8 +25,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from src.models import Fund, Holding, IntradaySectorFlow, SectorFlowDaily
-
+from src.models import Fund, Holding, IntradaySectorFlow, SectorAlias, SectorFlowDaily
 
 # =====================================================================
 # 辅助
@@ -89,6 +88,15 @@ def _mk_intraday(
         snapshot_time=snapshot_time,
         main_inflow_wan_x10000=Y(main_inflow_yi),
         change_pct_x10000=change_pct_x10000,
+    )
+
+
+def _mk_alias(label: str, sector_code: str, sector_name: str) -> SectorAlias:
+    return SectorAlias(
+        chinese_label=label,
+        sector_code=sector_code,
+        sector_name=sector_name,
+        confidence=1.0,
     )
 
 
@@ -497,6 +505,7 @@ def test_alerts_does_not_affect_radar(db_session, client):
     snap = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("X", "BK0X", snap, 30.0),
+        _mk_alias("X", "BK0X", "X"),
         _mk_fund("F1", "F1 name", ["X"]),
         _mk_holding("F1"),
     ])

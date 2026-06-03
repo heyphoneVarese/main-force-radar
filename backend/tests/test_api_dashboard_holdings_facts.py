@@ -10,7 +10,7 @@ import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from src.models import Fund, Holding, IntradaySectorFlow, SectorFlowDaily
+from src.models import Fund, Holding, IntradaySectorFlow, SectorAlias, SectorFlowDaily
 
 
 def Y(yi: float) -> int:
@@ -48,6 +48,12 @@ def _seed_streak(db_session, code: str, name: str, *, days: int,
                  inflow_yi: float = 50.0,
                  sector_type: str = "industry") -> None:
     """目标 sector 连续 days 天 in top20(本测试库小,自然 top1)。"""
+    db_session.add(SectorAlias(
+        chinese_label=name,
+        sector_code=code,
+        sector_name=name,
+        confidence=1.0,
+    ))
     for i in range(days):
         d = base_end - timedelta(days=i)
         db_session.add(_mk(code, name, d, inflow_yi, sector_type=sector_type))
@@ -168,6 +174,7 @@ def test_facts_unmapped_no_related_sectors(db_session, client):
     assert body["buckets"]["unmapped"] == 1
     assert body["holdings"][0]["mapped_sector"] is None
     assert body["holdings"][0]["sector_code"] is None
+    assert body["holdings"][0]["mapping_status"] == "not_applicable"
     assert body["holdings"][0]["continuous_top20_days"] is None
     assert body["holdings"][0]["latest_main_inflow_yi"] is None
     assert body["holdings"][0]["purity_score"] is None
@@ -183,6 +190,29 @@ def test_facts_unmapped_when_related_label_not_in_daily(db_session, client):
     body = client.get("/api/dashboard/holdings-facts").json()
     assert body["buckets"]["unmapped"] == 1
     assert body["holdings"][0]["mapped_sector"] is None
+    assert body["holdings"][0]["mapping_status"] == "unmapped"
+
+
+def test_facts_low_confidence_mapping_does_not_drive_facts(db_session, client):
+    _seed_streak(db_session, "BK_PV", "光伏", days=5)
+    db_session.flush()
+    alias = db_session.query(SectorAlias).filter_by(chinese_label="光伏").one()
+    alias.confidence = 0.6
+    db_session.add_all([
+        _mk_fund("F01", "光伏基金", ["光伏"]),
+        _mk_holding("F01"),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holdings-facts").json()
+    h = body["holdings"][0]
+    assert body["buckets"]["unmapped"] == 1
+    assert h["mapped_sector"] is None
+    assert h["sector_code"] == "BK_PV"
+    assert h["sector_name"] == "光伏"
+    assert h["mapping_status"] == "low_confidence"
+    assert h["mapping_confidence"] == 0.6
+    assert h["latest_main_inflow_yi"] is None
 
 
 # =====================================================================
@@ -205,7 +235,9 @@ def test_facts_compatible_shape_for_holdings_card(db_session, client):
     # 必备字段都在
     required = {
         "fund_code", "fund_name", "related_sectors",
-        "mapped_sector", "sector_code", "sector_name", "purity_score",
+        "mapped_sector", "sector_code", "sector_name",
+        "mapping_status", "mapping_confidence", "mapping_source",
+        "purity_score",
         "continuous_top20_days", "last_20_top20_days", "last_20_inflow_days",
         "latest_main_inflow_yi", "change_pct",
         "intraday_main_inflow_yi", "intraday_change_pct",
