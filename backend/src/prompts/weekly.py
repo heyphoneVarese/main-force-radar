@@ -1,4 +1,4 @@
-"""周报模板 — push_type=weekly, cron 16:00 fri。
+"""周报模板 — push_type=weekly, cron 20:00 sun。
 
 差异化重点:本周主线呈述 + 下周展望(跨日聚合)。
 注意 macro_context 提示语会出现"本周"而非"今日"。
@@ -6,8 +6,7 @@
 
 from src.prompts._common import BASE_RULES, build_user_message
 
-
-SCENARIO = """当前场景:周报(周五 16:00 CN,本周交易结束)。
+SCENARIO = """当前场景:周报(周日 20:00 CN,本周交易已结束)。
 你的任务:总结本周的资金主线、退潮主线,展望下周延续概率。
 
 ⚠️ 时间维度:macro_context 提示"本周"而非"今日",措辞需要随之调整

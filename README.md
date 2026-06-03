@@ -109,10 +109,11 @@ npm run dev
 
 - **SQLite 数据**在 `backend/data/main_force_radar.db`(host 卷挂载),`docker compose down` 不删数据,`down -v` 才删
 - **`backend/.env` 不要提交到 git**(已 gitignore;包含 API key + SCKEY)
-- **SCHEDULER_ENABLED=true** 后,4 个 cron 自动跑(Asia/Shanghai 时区):
-  - 12:55 mon-fri 盘前简报
-  - 14:30 mon-fri 盘中观察
+- **SCHEDULER_ENABLED=true** 后,5 个 push cron 自动跑(Asia/Shanghai 时区):
+  - 08:30 mon-fri 盘前简报
+  - 12:55 mon-fri 午盘观察
+  - 14:30 mon-fri 尾盘观察
   - 15:30 mon-fri 收盘复盘
-  - 16:00 fri 周报
-- **Server酱免费版日限 5 条**,工作日 3 条 + 周五额外 1 条 = ≤ 4,够用
+  - 20:00 sun 周报
+- **Server酱免费版日限 5 条**,工作日 4 条,周日 1 条
 - **akshare 在 VPS 上可访问 eastmoney**(本机海外环境拉不到的 `sector_flow_daily` 应该能跑通了。本地遗留 mock 数据 30 天 sector_flow 会跟真数据混在一起;首次 VPS 跑前可考虑 `DELETE FROM sector_flow_daily;` 清掉再重新 fetch)

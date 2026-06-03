@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 
@@ -19,7 +19,6 @@ from src.services.freshness import (
     assess_intraday_freshness,
     assess_market_freshness,
 )
-
 
 # =====================================================================
 # 辅助
@@ -261,7 +260,7 @@ def test_intraday_fetcher_logs_error_when_inserted_zero_and_errors(
 
 
 # =====================================================================
-# API 集成:7 个 endpoint 都返回 freshness 字段
+# API 集成:8 个 endpoint 都返回 freshness 字段
 # =====================================================================
 
 
@@ -287,6 +286,7 @@ _ENDPOINTS_WITH_FRESHNESS = [
     "/api/dashboard/sector-trends",
     "/api/dashboard/holding-sector-alerts",
     "/api/dashboard/holdings-facts",
+    "/api/dashboard/funds/top",
     "/api/dashboard/radar",
     "/api/dashboard/ai-summary",
 ]
@@ -311,3 +311,12 @@ def test_endpoint_freshness_marks_stale_when_old_data(db_session, client):
     body = client.get("/api/dashboard/sectors/top").json()
     assert body["freshness"]["is_fresh"] is False
     assert body["freshness"]["latest_time"] is not None
+
+
+def test_fetch_health_endpoint_shape(client):
+    body = client.get("/api/dashboard/fetch-health").json()
+    assert body["status"] in {"never_run", "ok", "partial_failure", "failed"}
+    assert isinstance(body["ok"], bool)
+    assert isinstance(body["errors"], list)
+    assert "last_run_at" in body
+    assert "stats" in body

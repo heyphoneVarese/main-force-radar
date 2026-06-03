@@ -26,6 +26,7 @@ from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
     DashboardRadarResponse,
+    FetchHealthResponse,
     FreshnessInfo,
     HoldingFactItem,
     HoldingFactsBuckets,
@@ -55,6 +56,7 @@ from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
 from src.services.dashboard_holdings import build_holdings_summary
 from src.services.data_fetcher import DEFAULT_INDICES, fetch_market_index
+from src.services.fetch_health import get_fetch_health
 from src.services.freshness import (
     assess_daily_freshness,
     assess_intraday_freshness,
@@ -86,6 +88,12 @@ def _daily_freshness(db: Session) -> FreshnessInfo:
 
 def _intraday_freshness(db: Session) -> FreshnessInfo:
     return FreshnessInfo(**assess_intraday_freshness(db))
+
+
+@router.get("/fetch-health", response_model=FetchHealthResponse)
+def get_dashboard_fetch_health() -> FetchHealthResponse:
+    """最近一次 scheduler daily_fetch 状态(进程内,不改 DB schema)。"""
+    return FetchHealthResponse(**get_fetch_health())
 
 
 def _to_index_response(row: MarketIndexDaily) -> MarketIndexResponse:
@@ -821,7 +829,11 @@ def get_top_funds(
         )
         for f in raw["funds"]
     ]
-    return TopFundsResponse(trade_date=raw["trade_date"], funds=funds_response)
+    return TopFundsResponse(
+        trade_date=raw["trade_date"],
+        funds=funds_response,
+        freshness=_daily_freshness(db),
+    )
 
 
 # =====================================================================

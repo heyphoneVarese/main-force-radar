@@ -321,6 +321,7 @@ export interface TopFund {
 export interface TopFunds {
   trade_date: string | null
   funds: TopFund[]
+  freshness: FreshnessInfo
 }
 
 export interface SectorBriefItem {

@@ -5,6 +5,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -233,6 +234,24 @@ class TopFundsResponse(BaseModel):
     )
     funds: list[TopFundResponse] = Field(
         description="按 via_sector main_inflow 降序排;最多 n 条"
+    )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估;来自 sector_flow_daily"
+    )
+
+
+class FetchHealthResponse(BaseModel):
+    """最近一次 daily_fetch 的进程内健康状态。"""
+
+    status: str = Field(description="never_run / ok / partial_failure / failed")
+    ok: bool = Field(description="True 表示最近一次 daily_fetch 无 errors")
+    last_run_at: datetime | None = Field(
+        default=None, description="最近一次 scheduler daily_fetch 运行时间"
+    )
+    errors: list[str] = Field(description="最近一次 daily_fetch errors")
+    stats: dict[str, Any] | None = Field(
+        default=None,
+        description="fetch_and_store_today 返回的统计字典;异常时为 null"
     )
 
 

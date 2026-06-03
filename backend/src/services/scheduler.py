@@ -1,10 +1,11 @@
 """APScheduler 定时任务 — Phase 3.11
 
-4 个 cron 任务(全部 Asia/Shanghai 时区):
-  - 12:55 CN  mon-fri  盘前简报(下午开盘前)
-  - 14:30 CN  mon-fri  盘中观察(尾盘前 30 分钟)
+5 个 push cron 任务(全部 Asia/Shanghai 时区):
+  - 08:30 CN  mon-fri  盘前简报
+  - 12:55 CN  mon-fri  午盘观察
+  - 14:30 CN  mon-fri  尾盘观察
   - 15:30 CN  mon-fri  收盘复盘(当日资金流向已定)
-  - 16:00 CN  fri      周报(总结本周主线)
+  - 20:00 CN  sun      周报(总结本周主线)
 
 每个 job 流程:
   1. SignalEngine.generate_signals_for_holdings()
@@ -17,7 +18,7 @@
 R6 不过度设计:不上 Celery/Redis 任务队列。APScheduler 单机 +
 BackgroundScheduler 够用,符合"个人自用工具"定位。
 
-Server酱 免费版日限 5 条:工作日 3 + 周报 1 = 4 ≤ 5 ✅
+Server酱 免费版日限 5 条:工作日 4,周日 1。
 """
 
 import logging
@@ -31,6 +32,7 @@ from src.db import SessionLocal
 from src.models.enums import PushType
 from src.services.ai_analyst import AIAnalyst
 from src.services.data_fetcher import fetch_and_store_today
+from src.services.fetch_health import record_fetch_exception, record_fetch_result
 from src.services.freshness import assess_daily_freshness
 from src.services.holdings_summary import build_holdings_by_sector
 from src.services.notifier import ServerChanNotifier
@@ -46,20 +48,27 @@ _DAILY_FRESHNESS_GATED_PUSH_TYPES = {
 }
 
 
-# 4 个 cron job 配置
+# 5 个 push cron job 配置
 JOBS_CONFIG: list[dict] = [
     {
         "job_id": "pre_market",
         "push_type": PushType.MORNING.value,
-        "cron": {"hour": 12, "minute": 55, "day_of_week": "mon-fri"},
+        "cron": {"hour": 8, "minute": 30, "day_of_week": "mon-fri"},
         "title_label": "盘前简报",
-        "macro_context": "盘前简报 — 下午开盘前的主力资金动向,关注开盘方向",
+        "macro_context": "盘前简报 — 开盘前的历史资金事实与持仓关注点",
     },
     {
-        "job_id": "intraday",
+        "job_id": "midday",
+        "push_type": PushType.MIDDAY.value,
+        "cron": {"hour": 12, "minute": 55, "day_of_week": "mon-fri"},
+        "title_label": "午盘观察",
+        "macro_context": "午盘观察 — 上午盘后主力资金动向与持仓关联事实",
+    },
+    {
+        "job_id": "tail",
         "push_type": PushType.MIDDAY.value,
         "cron": {"hour": 14, "minute": 30, "day_of_week": "mon-fri"},
-        "title_label": "盘中观察",
+        "title_label": "尾盘观察",
         "macro_context": "盘中观察 — 尾盘前 30 分钟,关注主力是否兑现日内动作",
     },
     {
@@ -72,7 +81,7 @@ JOBS_CONFIG: list[dict] = [
     {
         "job_id": "weekly",
         "push_type": PushType.WEEKLY.value,
-        "cron": {"hour": 16, "minute": 0, "day_of_week": "fri"},
+        "cron": {"hour": 20, "minute": 0, "day_of_week": "sun"},
         "title_label": "周报",
         "macro_context": "周报 — 总结本周主线 / 退潮主线,判断下周延续概率",
     },
@@ -85,14 +94,14 @@ class SignalScheduler:
         self.scheduler: BackgroundScheduler = BackgroundScheduler(timezone=timezone)
 
     def register_jobs(self) -> None:
-        """注册 4 个 push job + 1 个 daily_fetch job(共 5 个)。
+        """注册 5 个 push job + 1 个 daily_fetch job + 1 个 intraday_fetch job。
 
         ⚠️ 注意:scheduler 未启动时,APScheduler 的 add_job 会把任务放进
         pending list 而非按 ID 索引,此时 replace_existing=True 不会去重。
         生产里 lifespan 只 call 一次,不会撞到这个 quirk;但**别在 start()
         之前重复调用本方法**。
         """
-        # 4 个推送 job(JOBS_CONFIG)
+        # 5 个推送 job(JOBS_CONFIG)
         for config in JOBS_CONFIG:
             trigger = CronTrigger(timezone=self.timezone, **config["cron"])
             self.scheduler.add_job(
@@ -170,8 +179,10 @@ class SignalScheduler:
         try:
             with SessionLocal() as session:
                 stats = fetch_and_store_today(session)
+            record_fetch_result(stats)
             logger.info("Job [daily_fetch] 完成: %s", stats)
         except Exception as e:
+            record_fetch_exception(e)
             logger.error(
                 "Job [daily_fetch] 内部失败但已吞掉: %s: %s",
                 type(e).__name__, e,

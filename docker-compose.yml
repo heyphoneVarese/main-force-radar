@@ -22,9 +22,13 @@ services:
       dockerfile: Dockerfile
     image: mfr-backend:latest
     container_name: mfr-backend
-    ports:
-      # 暴露 8000 仅本机可达(健康检查 / 排查);如果不想暴露可去掉
-      - "8000:8000"
+    # 生产安全:backend 不发布到宿主机 0.0.0.0:8000。
+    # nginx/frontend 容器通过 compose 内部网络访问 http://backend:8000。
+    # 本地开发如需直连后端,新建 docker-compose.override.yml:
+    # services:
+    #   backend:
+    #     ports:
+    #       - "127.0.0.1:8000:8000"
     env_file:
       - ./backend/.env
     environment:

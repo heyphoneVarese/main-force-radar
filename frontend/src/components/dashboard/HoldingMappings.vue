@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TopFund, TopFunds } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 我的持仓映射卡(Phase 5.1 PR11)。
 //
@@ -93,6 +94,7 @@ function scoreChipClass(score: number): string {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

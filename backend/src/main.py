@@ -8,6 +8,7 @@ from src.api.dashboard import router as dashboard_router
 from src.api.funds import router as funds_router
 from src.api.holdings import router as holdings_router
 from src.config import settings
+from src.services.fetch_health import get_fetch_health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +32,7 @@ async def lifespan(app: FastAPI):
             _scheduler = SignalScheduler()
             _scheduler.register_jobs()
             _scheduler.start()
-            logger.info("✅ SignalScheduler started (4 cron jobs)")
+            logger.info("✅ SignalScheduler started")
         except Exception as e:
             logger.error("SignalScheduler 启动失败: %s: %s", type(e).__name__, e)
             _scheduler = None
@@ -77,4 +78,5 @@ def health():
         "service": "main-force-radar",
         "scheduler_enabled": settings.scheduler_enabled,
         "scheduler_running": _scheduler is not None and _scheduler.scheduler.running,
+        "daily_fetch": get_fetch_health(),
     }

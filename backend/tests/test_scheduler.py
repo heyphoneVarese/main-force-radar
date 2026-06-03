@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.models.enums import PushType
+from src.services.fetch_health import get_fetch_health
 from src.services.scheduler import CN_TZ, JOBS_CONFIG, SignalScheduler
 
 # ============================================================
@@ -17,8 +18,8 @@ from src.services.scheduler import CN_TZ, JOBS_CONFIG, SignalScheduler
 # ============================================================
 
 
-def test_jobs_config_has_4_jobs():
-    assert len(JOBS_CONFIG) == 4
+def test_jobs_config_has_5_push_jobs():
+    assert len(JOBS_CONFIG) == 5
 
 
 def test_jobs_config_covers_all_push_types():
@@ -34,10 +35,11 @@ def test_jobs_config_covers_all_push_types():
 @pytest.mark.parametrize(
     "job_id, hour, minute, day_of_week",
     [
-        ("pre_market", 12, 55, "mon-fri"),
-        ("intraday", 14, 30, "mon-fri"),
+        ("pre_market", 8, 30, "mon-fri"),
+        ("midday", 12, 55, "mon-fri"),
+        ("tail", 14, 30, "mon-fri"),
         ("close", 15, 30, "mon-fri"),
-        ("weekly", 16, 0, "fri"),
+        ("weekly", 20, 0, "sun"),
     ],
 )
 def test_jobs_config_cron_times_match_spec(job_id, hour, minute, day_of_week):
@@ -56,18 +58,18 @@ def test_jobs_config_every_job_has_required_fields():
 
 
 # ============================================================
-# register_jobs() — 时区 + 4 个 job + 幂等
+# register_jobs() — 时区 + 5 个 push job + 幂等
 # ============================================================
 
 
-def test_register_jobs_registers_6_jobs():
-    """4 个推送 job + 1 个 daily_fetch + 1 个 intraday_fetch(PR15)= 6 个。"""
+def test_register_jobs_registers_7_jobs():
+    """5 个推送 job + 1 个 daily_fetch + 1 个 intraday_fetch = 7 个。"""
     s = SignalScheduler()
     s.register_jobs()
-    assert len(s.scheduler.get_jobs()) == 6
+    assert len(s.scheduler.get_jobs()) == 7
     job_ids = {job.id for job in s.scheduler.get_jobs()}
     assert job_ids == {
-        "pre_market", "intraday", "close", "weekly",
+        "pre_market", "midday", "tail", "close", "weekly",
         "daily_fetch", "intraday_fetch",
     }
 
@@ -94,13 +96,13 @@ def test_register_jobs_after_start_is_idempotent():
     s.start()
     try:
         s.register_jobs()  # 这次走真去重
-        assert len(s.scheduler.get_jobs()) == 6
+        assert len(s.scheduler.get_jobs()) == 7
     finally:
         s.shutdown()
 
 
-def test_weekly_next_fire_is_friday():
-    """周报 job 的下次触发时刻应该落在周五。"""
+def test_weekly_next_fire_is_sunday():
+    """周报 job 的下次触发时刻应该落在周日 20:00。"""
     s = SignalScheduler()
     s.register_jobs()
     weekly_job = s.scheduler.get_job("weekly")
@@ -108,8 +110,8 @@ def test_weekly_next_fire_is_friday():
     monday = datetime(2026, 5, 25, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     next_fire = weekly_job.trigger.get_next_fire_time(None, monday)
     assert next_fire is not None
-    assert next_fire.weekday() == 4  # 4 = Friday
-    assert next_fire.hour == 16
+    assert next_fire.weekday() == 6  # 6 = Sunday
+    assert next_fire.hour == 20
     assert next_fire.minute == 0
 
 
@@ -404,6 +406,27 @@ def test_run_fetch_job_calls_fetch_and_store_today():
         }
         s._run_fetch_job()
     assert mock_fetch.called
+    health = get_fetch_health()
+    assert health["status"] == "ok"
+    assert health["ok"] is True
+    assert health["stats"]["sectors_inserted"] == 80
+
+
+def test_run_fetch_job_records_partial_failure_health():
+    s = SignalScheduler()
+    with patch("src.services.scheduler.fetch_and_store_today") as mock_fetch:
+        mock_fetch.return_value = {
+            "sectors_fetched": 0,
+            "sectors_inserted": 0,
+            "indices_fetched": 4,
+            "indices_inserted": 4,
+            "errors": ["sector_flow_industry: returned 0 rows"],
+        }
+        s._run_fetch_job()
+    health = get_fetch_health()
+    assert health["status"] == "partial_failure"
+    assert health["ok"] is False
+    assert health["errors"]
 
 
 def test_run_fetch_job_swallows_exception():
@@ -415,6 +438,10 @@ def test_run_fetch_job_swallows_exception():
     ):
         # 直接调内层不应抛(内层吞)
         s._run_fetch_job()
+    health = get_fetch_health()
+    assert health["status"] == "failed"
+    assert health["ok"] is False
+    assert "RuntimeError" in health["errors"][0]
 
 
 def test_make_fetch_callable_swallows_top_level_exception():

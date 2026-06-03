@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TopFunds } from '../../types'
+import StaleBanner from './StaleBanner.vue'
 
 // 主线关联基金候选(Phase 5.1 PR12)。
 //
@@ -67,6 +68,7 @@ function scoreChipClass(score: number): string {
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

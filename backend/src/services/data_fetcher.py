@@ -574,7 +574,7 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
     流程:
       1. fetch_sector_flow_industry() → sector_flow_daily(UNIQUE 去重)
       1.1 [P0 fallback] 1) 失败或返空时,试 intraday_sector_flow 今日
-          最新 snapshot industry → 直接写入 sector_flow_daily
+          最新 snapshot industry;仅记录 fallback_available,不写 daily
       2. 4 个市场指数各自 fetch_market_index(code) → market_index_daily(UNIQUE 去重)
 
     任何一项 fetcher 失败时,已就位 try-except + 重试 3 次后返回空列表,
@@ -582,8 +582,8 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
     幂等可补)。
 
     返回:统计字典 {sectors_fetched, sectors_inserted, indices_fetched,
-    indices_inserted, errors, [fallback_used?]}。errors 是字符串列表,
-    fallback_used 仅在 intraday fallback 命中时存在,值 'intraday_snapshot'。
+    indices_inserted, errors, [fallback_available?], [fallback_rows?]}。
+    errors 是字符串列表。
     """
     stats: dict[str, Any] = {
         "sectors_fetched": 0,
