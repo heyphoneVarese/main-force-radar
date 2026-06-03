@@ -1,10 +1,12 @@
 // 极简 fetch 封装。后端错误 detail 透传到 Error.message,UI 层用 ElMessage 展示。
 import type {
   AISummary,
+  CapitalMigrationResponse,
   DashboardRadarResponse,
   Fund,
   FundCreate,
   Holding,
+  HoldingsCapitalMigrationResponse,
   HoldingCreate,
   HoldingFactsSummary,
   HoldingSectorAlertsResponse,
@@ -142,5 +144,18 @@ export const dashboardApi = {
   ) =>
     jsonFetch<SectorTrendsResponse>(
       `${BASE}/dashboard/sector-trends?n=${n}&sector_type=${sectorType}`
+    ),
+  capitalMigration: (
+    n: number = 10,
+    sectorType: SectorTypeFilter = 'industry',
+    window: number = 20,
+  ) =>
+    jsonFetch<CapitalMigrationResponse>(
+      `${BASE}/dashboard/capital-migration?n=${n}&sector_type=${sectorType}` +
+      `&window=${window}`
+    ),
+  holdingsCapitalMigration: (window: number = 20) =>
+    jsonFetch<HoldingsCapitalMigrationResponse>(
+      `${BASE}/dashboard/holdings/capital-migration?window=${window}`
     ),
 }

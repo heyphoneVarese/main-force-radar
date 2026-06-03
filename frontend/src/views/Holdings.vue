@@ -8,12 +8,14 @@ import type {
   DashboardRadarResponse,
   Fund,
   Holding,
+  HoldingsCapitalMigrationResponse,
   HoldingFactsSummary,
   TopFunds,
 } from '../types'
 // Phase 2:在 CRUD 下面叠加 4 张分析卡(我的事实摘要 / 主力雷达 /
 // 基金候选 / 持仓映射)。从 Dashboard 迁过来,原 fetch + 状态机沿用。
 import HoldingMappings from '../components/dashboard/HoldingMappings.vue'
+import HoldingCapitalMigration from '../components/dashboard/HoldingCapitalMigration.vue'
 import MainRadar from '../components/dashboard/MainRadar.vue'
 import MarketTopFunds from '../components/dashboard/MarketTopFunds.vue'
 import MyHoldingsTable from '../components/dashboard/MyHoldingsTable.vue'
@@ -278,6 +280,10 @@ const fundsTopStatus = ref<AnalyticStatus>('loading')
 const fundsTopData = ref<TopFunds | null>(null)
 const fundsTopError = ref('')
 
+const capitalMigrationStatus = ref<AnalyticStatus>('loading')
+const capitalMigrationData = ref<HoldingsCapitalMigrationResponse | null>(null)
+const capitalMigrationError = ref('')
+
 // 全局板块 rank 字典(给 HoldingMappings 显示"板块 #N");失败静默
 const allSectorRanks = ref<Map<string, number>>(new Map())
 
@@ -301,6 +307,16 @@ function loadAnalytics(): void {
     dashboardApi.topFunds(20).then(
       (d) => { fundsTopData.value = d; fundsTopStatus.value = 'ready' },
       (e) => { fundsTopError.value = _analyticErr(e); fundsTopStatus.value = 'error' },
+    ),
+    dashboardApi.holdingsCapitalMigration(20).then(
+      (d) => {
+        capitalMigrationData.value = d
+        capitalMigrationStatus.value = 'ready'
+      },
+      (e) => {
+        capitalMigrationError.value = _analyticErr(e)
+        capitalMigrationStatus.value = 'error'
+      },
     ),
     dashboardApi.topSectors(100, 'all').then(
       (d) => {
@@ -592,6 +608,12 @@ onMounted(() => {
         :status="factsStatus"
         :data="factsData"
         :error="factsError"
+      />
+
+      <HoldingCapitalMigration
+        :status="capitalMigrationStatus"
+        :data="capitalMigrationData"
+        :error="capitalMigrationError"
       />
 
       <MainRadar

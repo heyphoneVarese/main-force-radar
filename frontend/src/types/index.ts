@@ -225,6 +225,79 @@ export interface SectorTrendsResponse {
   freshness: FreshnessInfo
 }
 
+// Phase 6 V1:资金状态变化。只展示最近 20 个交易日历史资金事实。
+export type CapitalMigrationStatus =
+  | 'inflowing'
+  | 'outflowing'
+  | 'weak_to_strong'
+  | 'strong_to_weak'
+  | 'strengthening'
+  | 'weakening'
+  | 'mixed'
+  | 'insufficient_data'
+
+export interface CapitalMigrationSectorItem {
+  sector_code: string
+  sector_name: string
+  sector_type: string
+  migration_status: CapitalMigrationStatus
+  sample_days: number
+  is_partial_window: boolean
+  first_half_sum_yi: string
+  second_half_sum_yi: string
+  delta_yi: string
+  first_half_inflow_days: number
+  second_half_inflow_days: number
+  first_half_outflow_days: number
+  second_half_outflow_days: number
+  inflow_days_20: number
+  outflow_days_20: number
+  latest_main_inflow_yi: string
+  latest_trade_date_rank: number | null
+}
+
+export interface CapitalMigrationResponse {
+  trade_date: string | null
+  sector_type: 'industry' | 'concept' | 'all'
+  window: number
+  sample_days: number
+  is_partial_window: boolean
+  inflowing: CapitalMigrationSectorItem[]
+  outflowing: CapitalMigrationSectorItem[]
+  weak_to_strong: CapitalMigrationSectorItem[]
+  strong_to_weak: CapitalMigrationSectorItem[]
+  freshness: FreshnessInfo
+}
+
+export interface HoldingCapitalMigrationItem {
+  fund_code: string
+  fund_name: string
+  related_sectors: string[]
+  sector_code: string | null
+  sector_name: string | null
+  mapped_sector: string | null
+  mapping_status: 'verified' | 'low_confidence' | 'unmapped' | 'not_applicable'
+  mapping_confidence: number | null
+  mapping_source: string | null
+  migration_status: CapitalMigrationStatus
+  sample_days: number
+  is_partial_window: boolean
+  first_half_sum_yi: string | null
+  second_half_sum_yi: string | null
+  delta_yi: string | null
+  inflow_days_20: number | null
+  outflow_days_20: number | null
+}
+
+export interface HoldingsCapitalMigrationResponse {
+  trade_date: string | null
+  window: number
+  sample_days: number
+  is_partial_window: boolean
+  holdings: HoldingCapitalMigrationItem[]
+  freshness: FreshnessInfo
+}
+
 // PR26:持仓-事实摘要(替换旧情绪系统 HoldingsSummary)
 // R3 红线:**不含** signal_type / bullish / bearish / warning / neutral /
 // persistence_score / health / rating。

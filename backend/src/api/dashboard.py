@@ -25,12 +25,16 @@ from src.db import get_session
 from src.models import IntradaySectorFlow, MarketIndexDaily, SectorFlowDaily
 from src.schemas.dashboard import (
     AISummaryResponse,
+    CapitalMigrationResponse,
+    CapitalMigrationSectorItem,
     DashboardRadarResponse,
     FetchHealthResponse,
     FreshnessInfo,
+    HoldingCapitalMigrationItem,
     HoldingFactItem,
     HoldingFactsBuckets,
     HoldingFactsSummaryResponse,
+    HoldingsCapitalMigrationResponse,
     HoldingSectorAlertItem,
     HoldingSectorAlertsResponse,
     HoldingSignalResponse,
@@ -51,6 +55,10 @@ from src.schemas.dashboard import (
     TopFundResponse,
     TopFundsResponse,
     TopSectorsResponse,
+)
+from src.services.capital_migration import (
+    build_capital_migration,
+    build_holdings_capital_migration,
 )
 from src.services.dashboard_ai import build_extended_ai_summary
 from src.services.dashboard_funds import build_top_funds
@@ -536,6 +544,132 @@ def get_sector_trends(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_trend_item(it) for it in raw["items"]],
+        freshness=_daily_freshness(db),
+    )
+
+
+# =====================================================================
+# Phase 6 V1 — 资金迁移雷达
+# =====================================================================
+
+
+def _yi_from_raw(value: int | None) -> Decimal | None:
+    return Decimal(value) / _YI_DIVISOR if value is not None else None
+
+
+def _to_capital_migration_sector_item(
+    d: dict[str, Any],
+) -> CapitalMigrationSectorItem:
+    return CapitalMigrationSectorItem(
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        sector_type=d["sector_type"],
+        migration_status=d["migration_status"],
+        sample_days=d["sample_days"],
+        is_partial_window=d["is_partial_window"],
+        first_half_sum_yi=_yi_from_raw(d["first_half_sum_wan_x10000"]),
+        second_half_sum_yi=_yi_from_raw(d["second_half_sum_wan_x10000"]),
+        delta_yi=_yi_from_raw(d["delta_wan_x10000"]),
+        first_half_inflow_days=d["first_half_inflow_days"],
+        second_half_inflow_days=d["second_half_inflow_days"],
+        first_half_outflow_days=d["first_half_outflow_days"],
+        second_half_outflow_days=d["second_half_outflow_days"],
+        inflow_days_20=d["inflow_days_20"],
+        outflow_days_20=d["outflow_days_20"],
+        latest_main_inflow_yi=_yi_from_raw(d["latest_main_inflow_wan_x10000"]),
+        latest_trade_date_rank=d["latest_trade_date_rank"],
+    )
+
+
+@router.get("/capital-migration", response_model=CapitalMigrationResponse)
+def get_capital_migration(
+    n: int = Query(10, ge=1, le=100, description="每组最多返回 N 条"),
+    window: int = Query(20, ge=2, le=60, description="最近 N 个实际交易日"),
+    sector_type: Literal["industry", "concept", "all"] = Query(
+        "industry", description="过滤板块类型"
+    ),
+    db: Session = Depends(get_session),
+) -> CapitalMigrationResponse:
+    """资金迁移雷达 V1。
+
+    仅展示最近 window 个实际交易日的历史资金事实,不预测、不建议,不表达
+    "资金从 A 流向 B"。
+    """
+    raw = build_capital_migration(
+        db, window=window, sector_type=sector_type, n=n
+    )
+    return CapitalMigrationResponse(
+        trade_date=raw["trade_date"],
+        sector_type=raw["sector_type"],
+        window=raw["window"],
+        sample_days=raw["sample_days"],
+        is_partial_window=raw["is_partial_window"],
+        inflowing=[
+            _to_capital_migration_sector_item(it) for it in raw["inflowing"]
+        ],
+        outflowing=[
+            _to_capital_migration_sector_item(it) for it in raw["outflowing"]
+        ],
+        weak_to_strong=[
+            _to_capital_migration_sector_item(it)
+            for it in raw["weak_to_strong"]
+        ],
+        strong_to_weak=[
+            _to_capital_migration_sector_item(it)
+            for it in raw["strong_to_weak"]
+        ],
+        freshness=_daily_freshness(db),
+    )
+
+
+def _to_holding_capital_migration_item(
+    d: dict[str, Any],
+) -> HoldingCapitalMigrationItem:
+    return HoldingCapitalMigrationItem(
+        fund_code=d["fund_code"],
+        fund_name=d["fund_name"],
+        related_sectors=d["related_sectors"],
+        sector_code=d["sector_code"],
+        sector_name=d["sector_name"],
+        mapped_sector=d["mapped_sector"],
+        mapping_status=d["mapping_status"],
+        mapping_confidence=d["mapping_confidence"],
+        mapping_source=d["mapping_source"],
+        migration_status=d["migration_status"],
+        sample_days=d["sample_days"],
+        is_partial_window=d["is_partial_window"],
+        first_half_sum_yi=_yi_from_raw(d["first_half_sum_wan_x10000"]),
+        second_half_sum_yi=_yi_from_raw(d["second_half_sum_wan_x10000"]),
+        delta_yi=_yi_from_raw(d["delta_wan_x10000"]),
+        inflow_days_20=d["inflow_days_20"],
+        outflow_days_20=d["outflow_days_20"],
+    )
+
+
+@router.get(
+    "/holdings/capital-migration",
+    response_model=HoldingsCapitalMigrationResponse,
+)
+def get_holdings_capital_migration(
+    window: int = Query(20, ge=2, le=60, description="最近 N 个实际交易日"),
+    db: Session = Depends(get_session),
+) -> HoldingsCapitalMigrationResponse:
+    """我的持仓主线资金状态变化 V1。
+
+    持仓映射必须复用 resolve_fund_sector_mappings;只有 verified /
+    eligible_for_sorting 映射参与事实判断。low_confidence / unmapped /
+    not_applicable 只展示状态。
+    """
+    raw = build_holdings_capital_migration(db, window=window)
+    return HoldingsCapitalMigrationResponse(
+        trade_date=raw["trade_date"],
+        window=raw["window"],
+        sample_days=raw["sample_days"],
+        is_partial_window=raw["is_partial_window"],
+        holdings=[
+            _to_holding_capital_migration_item(it)
+            for it in raw["holdings"]
+        ],
         freshness=_daily_freshness(db),
     )
 

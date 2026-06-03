@@ -723,6 +723,98 @@ class SectorTrendsResponse(BaseModel):
 
 
 # =====================================================================
+# Phase 6 V1 — 资金迁移雷达(历史资金事实)
+# =====================================================================
+
+
+class CapitalMigrationSectorItem(BaseModel):
+    """单个板块的资金状态变化事实。
+
+    R3 红线:只展示最近 window 个实际交易日的历史资金事实,不预测、不建议,
+    不表达"资金从 A 流向 B"。
+    """
+
+    sector_code: str
+    sector_name: str
+    sector_type: str
+    migration_status: str = Field(
+        description="inflowing / outflowing / weak_to_strong / strong_to_weak"
+    )
+    sample_days: int = Field(ge=0, description="该板块窗口内实际有记录的天数")
+    is_partial_window: bool = Field(description="True=不足 window 个交易日样本")
+    first_half_sum_yi: Decimal = Field(description="窗口前半段主力净流入合计,亿元")
+    second_half_sum_yi: Decimal = Field(description="窗口后半段主力净流入合计,亿元")
+    delta_yi: Decimal = Field(description="后半段合计 - 前半段合计,亿元")
+    first_half_inflow_days: int = Field(ge=0)
+    second_half_inflow_days: int = Field(ge=0)
+    first_half_outflow_days: int = Field(ge=0)
+    second_half_outflow_days: int = Field(ge=0)
+    inflow_days_20: int = Field(ge=0)
+    outflow_days_20: int = Field(ge=0)
+    latest_main_inflow_yi: Decimal = Field(description="最新交易日主力净流入,亿元")
+    latest_trade_date_rank: int | None = Field(
+        default=None,
+        description="最新交易日按主力净流入排序的名次;没有最新日记录则 null"
+    )
+
+
+class CapitalMigrationResponse(BaseModel):
+    """全市场资金迁移雷达 V1。
+
+    四组列表都是历史事实分类,不是预测、不是评分、不是投资建议。
+    """
+
+    trade_date: date | None
+    sector_type: str
+    window: int = Field(ge=2, le=60)
+    sample_days: int = Field(ge=0)
+    is_partial_window: bool
+    inflowing: list[CapitalMigrationSectorItem]
+    outflowing: list[CapitalMigrationSectorItem]
+    weak_to_strong: list[CapitalMigrationSectorItem]
+    strong_to_weak: list[CapitalMigrationSectorItem]
+    freshness: FreshnessInfo
+
+
+class HoldingCapitalMigrationItem(BaseModel):
+    """单只持仓映射主线的资金状态变化事实。"""
+
+    fund_code: str
+    fund_name: str
+    related_sectors: list[str]
+    sector_code: str | None = None
+    sector_name: str | None = None
+    mapped_sector: str | None = None
+    mapping_status: str = Field(
+        description="verified / low_confidence / unmapped / not_applicable"
+    )
+    mapping_confidence: float | None = None
+    mapping_source: str | None = None
+    migration_status: str = Field(
+        description="strengthening / weakening / inflowing / outflowing / "
+                    "mixed / insufficient_data"
+    )
+    sample_days: int = Field(ge=0)
+    is_partial_window: bool
+    first_half_sum_yi: Decimal | None = None
+    second_half_sum_yi: Decimal | None = None
+    delta_yi: Decimal | None = None
+    inflow_days_20: int | None = Field(default=None, ge=0)
+    outflow_days_20: int | None = Field(default=None, ge=0)
+
+
+class HoldingsCapitalMigrationResponse(BaseModel):
+    """我的持仓主线资金状态变化 V1。"""
+
+    trade_date: date | None
+    window: int = Field(ge=2, le=60)
+    sample_days: int = Field(ge=0)
+    is_partial_window: bool
+    holdings: list[HoldingCapitalMigrationItem]
+    freshness: FreshnessInfo
+
+
+# =====================================================================
 # 持仓-事实摘要(PR26)— 取代旧情绪系统(bullish/bearish/warning/neutral)
 # =====================================================================
 
