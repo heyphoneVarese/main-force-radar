@@ -91,12 +91,17 @@ def _mk_intraday(
     )
 
 
-def _mk_alias(label: str, sector_code: str, sector_name: str) -> SectorAlias:
+def _mk_alias(
+    label: str,
+    sector_code: str | None,
+    sector_name: str | None,
+    confidence: float = 1.0,
+) -> SectorAlias:
     return SectorAlias(
         chinese_label=label,
         sector_code=sector_code,
         sector_name=sector_name,
-        confidence=1.0,
+        confidence=confidence,
     )
 
 
@@ -118,6 +123,7 @@ def _seed_long_persistence(
     到 20 字符内)以避免多次调用相互冲突 UniqueConstraint。
     """
     base = date(2026, 5, 31)
+    db_session.add(_mk_alias(sector_name, sector_code, sector_name))
     for i in range(days):
         d = base - timedelta(days=i)
         # 目标 sector
@@ -176,6 +182,31 @@ def test_alerts_single_holding_not_triggered(db_session, client):
     db_session.commit()
     body = client.get("/api/dashboard/holding-sector-alerts").json()
     # holding_count=1,门槛 >=2;无 alert
+    assert body["items"] == []
+
+
+def test_alerts_require_verified_sector_alias(db_session, client):
+    """low_confidence / unmapped / not_applicable 不参与提醒判断。"""
+    _seed_long_persistence(db_session, "半导体", "BK0490", days=30)
+    db_session.add_all([
+        _mk_alias("低置信半导体", "BK0490", "半导体", confidence=0.6),
+        _mk_alias("不适用主题", None, None, confidence=0.0),
+        _mk_fund("L01", "低置信A", ["低置信半导体"]),
+        _mk_fund("L02", "低置信B", ["低置信半导体"]),
+        _mk_fund("U01", "未映射A", ["不存在主题"]),
+        _mk_fund("U02", "未映射B", ["不存在主题"]),
+        _mk_fund("N01", "不适用A", ["不适用主题"]),
+        _mk_fund("N02", "不适用B", ["不适用主题"]),
+        _mk_holding("L01"),
+        _mk_holding("L02"),
+        _mk_holding("U01"),
+        _mk_holding("U02"),
+        _mk_holding("N01"),
+        _mk_holding("N02"),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holding-sector-alerts").json()
     assert body["items"] == []
 
 
@@ -256,6 +287,7 @@ def test_alerts_continuous_outflow_holding_sector(db_session, client):
     base = date(2026, 5, 31)
     sector_name = "白酒"
     sector_code = "BK0721"
+    db_session.add(_mk_alias(sector_name, sector_code, sector_name))
     # 连续 5 天净流出,该 sector 也不出现在前 20(让 continuous_top20=0)
     for i in range(5):
         d = base - timedelta(days=i)
@@ -376,6 +408,10 @@ def test_alerts_sort_by_holding_count_then_top20(db_session, client):
 
     snap = datetime(2026, 6, 1, 14, 30)
     db_session.add(_mk_intraday("SectorB", "BK0002", snap, 80.0))
+    db_session.add_all([
+        _mk_alias("SectorA", "BK0001", "SectorA"),
+        _mk_alias("SectorB", "BK0002", "SectorB"),
+    ])
 
     db_session.add_all([
         _mk_fund(f"FA{i}", f"FA{i} name", ["SectorA"]) for i in range(5)
@@ -438,6 +474,12 @@ def test_alerts_messages_have_no_banned_words(db_session, client):
         _mk_intraday("SectorA", "BK0001", snap, -50.0),  # A 类触发器
         _mk_intraday("SectorB", "BK0002", snap, 60.0),   # B 类触发器
         # 不给 SectorD / SectorC 加 intraday(避免 D/C 被 A/B 优先级覆盖)
+    ])
+    db_session.add_all([
+        _mk_alias("SectorA", "BK0001", "SectorA"),
+        _mk_alias("SectorB", "BK0002", "SectorB"),
+        _mk_alias("SectorC", "BK0003", "SectorC"),
+        _mk_alias("SectorD", "BK0004", "SectorD"),
     ])
 
     # 持仓
@@ -505,7 +547,6 @@ def test_alerts_does_not_affect_radar(db_session, client):
     snap = datetime(2026, 6, 1, 14, 30)
     db_session.add_all([
         _mk_intraday("X", "BK0X", snap, 30.0),
-        _mk_alias("X", "BK0X", "X"),
         _mk_fund("F1", "F1 name", ["X"]),
         _mk_holding("F1"),
     ])

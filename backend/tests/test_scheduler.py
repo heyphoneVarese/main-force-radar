@@ -4,14 +4,13 @@
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from src.models.enums import PushType
 from src.services.scheduler import CN_TZ, JOBS_CONFIG, SignalScheduler
-
 
 # ============================================================
 # JOBS_CONFIG 静态约束(cron 时间 + push_type 一一对应)
@@ -185,6 +184,8 @@ def test_run_push_job_writes_push_log_on_send_failure():
     s = SignalScheduler()
     with patch("src.services.scheduler.SignalEngine") as mock_engine_cls, \
          patch("src.services.scheduler.build_holdings_by_sector", return_value={}), \
+         patch("src.services.scheduler.assess_daily_freshness",
+               return_value={"is_fresh": True, "reason": "fresh"}), \
          patch("src.services.notifier.ServerChanNotifier.send", return_value=False), \
          patch("src.services.scheduler.write_push_log") as mock_write_log, \
          patch("src.services.scheduler.settings") as mock_settings:
@@ -197,6 +198,34 @@ def test_run_push_job_writes_push_log_on_send_failure():
     kw = mock_write_log.call_args.kwargs
     assert kw["success"] is False
     assert kw["error"] is not None
+
+
+def test_run_push_job_blocks_close_when_daily_stale():
+    s = SignalScheduler()
+    stale = {
+        "is_fresh": False,
+        "reason": "今日 2026-06-03 已过 15:30,但 daily 最新是 2026-06-02",
+    }
+    with patch("src.services.scheduler.SignalEngine") as mock_engine_cls, \
+         patch("src.services.scheduler.build_holdings_by_sector") as mock_hbs, \
+         patch("src.services.scheduler.assess_daily_freshness", return_value=stale), \
+         patch("src.services.notifier.ServerChanNotifier.send") as mock_send, \
+         patch("src.services.scheduler.write_push_log") as mock_write_log, \
+         patch("src.services.scheduler.settings") as mock_settings:
+        mock_settings.anthropic_api_key = ""
+        mock_settings.server_chan_sckey = "test_sckey"
+
+        s._run_push_job("evening", "收盘复盘", "test")
+
+    assert not mock_engine_cls.called
+    assert not mock_hbs.called
+    assert not mock_send.called
+    assert mock_write_log.called
+    kw = mock_write_log.call_args.kwargs
+    assert kw["push_type"] == "evening"
+    assert kw["success"] is False
+    assert "daily 最新" in kw["error"]
+    assert "本次未生成收盘/周报强结论" in kw["content"]
 
 
 def test_run_push_job_continues_when_signal_engine_fails():

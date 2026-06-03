@@ -22,8 +22,9 @@ RemoteDisconnected / ConnectionResetError。根因三条叠加:
 import logging
 import random
 import time
-from datetime import date, datetime
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from datetime import date
+from typing import Any, TypeVar
 
 import akshare as ak
 import pandas as pd
@@ -510,19 +511,17 @@ def insert_market_index_rows(
 def _fallback_industry_from_intraday(
     session: Session,
 ) -> list[dict[str, Any]]:
-    """direct + akshare 都拿不到 industry daily 时的兜底:用今日最新
-    intraday snapshot 的 industry 行,组成 sector_flow_daily 兼容 dict
-    列表(可直接喂 insert_sector_flow_rows)。
+    """direct + akshare 都拿不到 industry daily 时的诊断兜底。
 
     硬约束:
     - 只挑 sector_type='industry'(spec:不要乱写 concept)
     - latest_snapshot.date() 必须等于 cn_today();否则 return [] 放弃
     - intraday 表为空或当日 industry 行为 0 → return []
 
-    取舍说明(写进 log 也写进调用方 stats):
-    - intraday 的 main_inflow_wan_x10000 是"该 snapshot 时刻起累计净流入",
-      不是真 EOD;盘中 14:30 触发时大约缺最后 30 分钟尾盘资金。
-    - 这是"日终数据丢了不如有 14:30 在手"的妥协,不是新的真值源。
+    注意:本函数返回行只用于 stats/log 可观测性,不再写入
+    sector_flow_daily。intraday 的 main_inflow_wan_x10000 是"该 snapshot
+    时刻起累计净流入",不是真 EOD;在不改表结构、没有 source 字段时写入
+    daily 会污染历史快照,并被唯一键永久阻止真实 EOD 覆盖。
     """
     # 延后导入避免顶层循环(本模块不依赖 intraday 业务)
     from src.models import IntradaySectorFlow
@@ -612,18 +611,19 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
             "fetch_and_store_today: sector_flow_industry %s", upstream_err,
         )
 
-    # 1.1 P0 fallback:主路径拿不到 → 用今日最新 intraday snapshot industry
+    # 1.1 P0 guard:主路径拿不到时只诊断 intraday 可用性,不写入 daily。
+    # 没有 source 字段时,把盘中累计值写进 sector_flow_daily 会永久污染
+    # EOD 语义,并因 (trade_date, sector_code) 唯一键阻止真实 daily 补采。
     if not sector_rows:
         fallback_rows = _fallback_industry_from_intraday(session)
         if fallback_rows:
-            sector_rows = fallback_rows
-            stats["sectors_fetched"] = len(sector_rows)
-            stats["fallback_used"] = "intraday_snapshot"
+            stats["fallback_available"] = "intraday_snapshot"
+            stats["fallback_rows"] = len(fallback_rows)
             logger.warning(
                 "fetch_and_store_today: sector_flow_industry "
-                "fallback_from_intraday — using %d rows from today's "
-                "latest intraday snapshot",
-                len(sector_rows),
+                "fallback_from_intraday available (%d rows) but not persisted "
+                "to sector_flow_daily because intraday is not EOD daily data",
+                len(fallback_rows),
             )
 
     if sector_rows:
@@ -639,9 +639,14 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
     else:
         # 主路径失败且 fallback 也不可用 → 唯一一条 errors 行,
         # 兼容旧测试断言("sector_flow_industry" + "0 rows")
+        fallback_msg = (
+            "intraday fallback available but not persisted to daily"
+            if stats.get("fallback_available")
+            else "intraday fallback also empty/wrong-day"
+        )
         stats["errors"].append(
             f"sector_flow_industry: {upstream_err or 'returned 0 rows'}; "
-            "intraday fallback also empty/wrong-day"
+            f"{fallback_msg}"
         )
 
     # 2. 4 大市场指数

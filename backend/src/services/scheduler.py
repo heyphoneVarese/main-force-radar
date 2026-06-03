@@ -31,6 +31,7 @@ from src.db import SessionLocal
 from src.models.enums import PushType
 from src.services.ai_analyst import AIAnalyst
 from src.services.data_fetcher import fetch_and_store_today
+from src.services.freshness import assess_daily_freshness
 from src.services.holdings_summary import build_holdings_by_sector
 from src.services.notifier import ServerChanNotifier
 from src.services.push_log import write_push_log
@@ -39,6 +40,10 @@ from src.services.signal_engine import SignalEngine
 logger = logging.getLogger(__name__)
 
 CN_TZ = "Asia/Shanghai"
+_DAILY_FRESHNESS_GATED_PUSH_TYPES = {
+    PushType.EVENING.value,
+    PushType.WEEKLY.value,
+}
 
 
 # 4 个 cron job 配置
@@ -225,6 +230,48 @@ class SignalScheduler:
         """共用流程:信号 → AI(可选) → 推送 → 写 push_logs。
         每个 try-except 独立,某一步失败不会中断后续步骤。"""
         logger.info("Job [%s] 开始执行", push_type)
+
+        # 收盘复盘 / 周报依赖 sector_flow_daily 的 EOD 语义。若 daily 数据
+        # 过期,直接阻断推送,避免输出"今日/收盘"强结论。
+        if push_type in _DAILY_FRESHNESS_GATED_PUSH_TYPES:
+            stale_reason: str | None = None
+            try:
+                with SessionLocal() as session:
+                    freshness = assess_daily_freshness(session)
+                if not freshness["is_fresh"]:
+                    stale_reason = freshness["reason"]
+            except Exception as e:
+                stale_reason = (
+                    f"daily freshness check failed: {type(e).__name__}: {e}"
+                )
+
+            if stale_reason:
+                title = f"📊 {title_label} · 数据过期"
+                content = (
+                    "### 数据过期\n\n"
+                    f"{stale_reason}\n\n"
+                    "本次未生成收盘/周报强结论。"
+                )
+                logger.warning(
+                    "Job [%s] blocked by stale daily freshness: %s",
+                    push_type, stale_reason,
+                )
+                try:
+                    with SessionLocal() as session:
+                        write_push_log(
+                            session,
+                            push_type=push_type,
+                            title=title,
+                            content=content,
+                            success=False,
+                            error=stale_reason,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Job [%s] stale push_log 写入失败: %s: %s",
+                        push_type, type(e).__name__, e,
+                    )
+                return
 
         # 1. 信号 + 持仓
         signals: list = []

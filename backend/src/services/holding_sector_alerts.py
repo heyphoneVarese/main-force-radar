@@ -10,11 +10,11 @@ R3 红线(spec):
 R6 简化:
 - 复用 sector_persistence._load_context + _compute_facts(PR20/21)
 - intraday 只用 industry(跟 radar 一致,避免 concept 噪声)
-- sector_name 精确匹配(strip 后 equals)
+- 持仓基金统一走 sector_aliases 高置信映射,再用 sector_code 关联资金流
 - 一次性把 funds / holdings 拉进内存做映射
 
 数据来源:
-1. holdings + funds → 每个 sector_name 关联了多少只我持仓的基金
+1. holdings + funds → sector_aliases → 每个 sector_code 关联了多少只我持仓的基金
 2. sector_flow_daily → 连续天数事实(via _compute_facts)
 3. intraday_sector_flow → 最新 snapshot industry 数据(可选)
 
@@ -50,17 +50,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models import Fund, Holding, IntradaySectorFlow, SectorFlowDaily
+from src.services.sector_mapping import resolve_fund_sector_mappings
 from src.services.sector_persistence import _compute_facts, _load_context
 
 
 def _collect_holding_sector_groups(
     session: Session,
 ) -> dict[str, list[dict[str, str]]]:
-    """{sector_name(stripped): [{"fund_code","fund_name"}, ...]}。
+    """{sector_code: [{"fund_code","fund_name"}, ...]}。
 
-    只考虑 holdings 表里实际持有的基金。fund.related_sectors 里每个标签
-    都会被独立计数(即一只 "半导体+CPO" 基金会同时进入两个 sector 的
-    list,跟 PR20 spec 一致 — 我们关心的是"这个板块被多少持仓基金关联")。
+    只考虑 holdings 表里实际持有的基金,并且只接受
+    resolve_fund_sector_mappings() 返回的 eligible_for_sorting 映射。
+    low_confidence / unmapped / not_applicable 都不参与提醒判断。
     """
     held_codes: set[str] = set(
         session.scalars(select(Holding.fund_code)).all()
@@ -72,12 +73,14 @@ def _collect_holding_sector_groups(
     for fund in session.scalars(
         select(Fund).where(Fund.fund_code.in_(held_codes))
     ):
-        related = fund.related_sectors or []
-        for label in related:
-            key = (label or "").strip()
-            if not key:
+        seen_codes: set[str] = set()
+        for mapping in resolve_fund_sector_mappings(session, fund.fund_code):
+            if not mapping.eligible_for_sorting or mapping.sector_code is None:
                 continue
-            groups.setdefault(key, []).append({
+            if mapping.sector_code in seen_codes:
+                continue
+            seen_codes.add(mapping.sector_code)
+            groups.setdefault(mapping.sector_code, []).append({
                 "fund_code": fund.fund_code,
                 "fund_name": fund.fund_name or "",
             })
@@ -90,9 +93,9 @@ def _load_intraday_industry(
     """加载最新 snapshot 的 industry intraday 数据。
 
     Returns:
-        (latest_snapshot_time, by_name)
+        (latest_snapshot_time, by_code)
         latest_snapshot_time: datetime | None
-        by_name: {sector_name: {sector_code, main_inflow_wan_x10000,
+        by_code: {sector_code: {sector_name, main_inflow_wan_x10000,
                                 change_pct_x10000, rank}}
         rank 按 main_inflow_wan_x10000 DESC,1-based。
     """
@@ -109,18 +112,18 @@ def _load_intraday_industry(
         .where(IntradaySectorFlow.sector_type == "industry")
         .order_by(IntradaySectorFlow.main_inflow_wan_x10000.desc())
     ))
-    by_name: dict[str, dict[str, Any]] = {}
+    by_code: dict[str, dict[str, Any]] = {}
     for rank, r in enumerate(rows, start=1):
-        key = (r.sector_name or "").strip()
-        if not key or key in by_name:
+        key = (r.sector_code or "").strip()
+        if not key or key in by_code:
             continue
-        by_name[key] = {
-            "sector_code": r.sector_code,
+        by_code[key] = {
+            "sector_name": r.sector_name,
             "main_inflow_wan_x10000": r.main_inflow_wan_x10000,
             "change_pct_x10000": r.change_pct_x10000,
             "rank": rank,
         }
-    return latest, by_name
+    return latest, by_code
 
 
 def _pick_alert_type(
@@ -244,10 +247,10 @@ def build_holding_sector_alerts(
             "items": [],
         }
 
-    latest_snapshot, intraday_by_name = _load_intraday_industry(session)
+    latest_snapshot, intraday_by_code = _load_intraday_industry(session)
 
-    # 最新日 industry 行,按 sector_name 索引(_compute_facts 需要原 row)
-    latest_industry_by_name: dict[str, SectorFlowDaily] = {}
+    # 最新日 industry 行,按 sector_code 索引(_compute_facts 需要原 row)
+    latest_industry_by_code: dict[str, SectorFlowDaily] = {}
     by_inflow: dict[str, int] = {}  # 排名给 _compute_facts;不参与 alert 输出
     latest_rows = [
         r for r in ctx["all_rows"]
@@ -255,22 +258,22 @@ def build_holding_sector_alerts(
     ]
     latest_rows.sort(key=lambda r: -r.main_inflow_wan_x10000)
     for i, r in enumerate(latest_rows, start=1):
-        key = (r.sector_name or "").strip()
-        if not key or key in latest_industry_by_name:
+        key = (r.sector_code or "").strip()
+        if not key or key in latest_industry_by_code:
             continue
-        latest_industry_by_name[key] = r
+        latest_industry_by_code[key] = r
         by_inflow[key] = i
 
     items: list[dict[str, Any]] = []
-    for sector_name, fund_list in holding_groups.items():
+    for sector_code, fund_list in holding_groups.items():
         holding_count = len(fund_list)
-        daily_row = latest_industry_by_name.get(sector_name)
+        daily_row = latest_industry_by_code.get(sector_code)
         if daily_row is None:
             # 无 daily 数据 → 所有触发条件都需要 daily,跳过
             continue
-        facts = _compute_facts(ctx, daily_row, by_inflow[sector_name])
+        facts = _compute_facts(ctx, daily_row, by_inflow[sector_code])
 
-        intraday_info = intraday_by_name.get(sector_name)
+        intraday_info = intraday_by_code.get(sector_code)
         intraday_wan_x10000 = (
             intraday_info["main_inflow_wan_x10000"]
             if intraday_info else None
@@ -287,18 +290,15 @@ def build_holding_sector_alerts(
 
         message = _build_message(
             alert_type=alert_type,
-            sector_name=sector_name,
+            sector_name=daily_row.sector_name,
             holding_count=holding_count,
             facts=facts,
             intraday_inflow_wan_x10000=intraday_wan_x10000,
         )
 
         items.append({
-            "sector_name": sector_name,
-            "sector_code": (
-                intraday_info["sector_code"]
-                if intraday_info else daily_row.sector_code
-            ),
+            "sector_name": daily_row.sector_name,
+            "sector_code": daily_row.sector_code,
             "holding_count": holding_count,
             "holding_fund_codes": [f["fund_code"] for f in fund_list],
             "holding_fund_names": [f["fund_name"] for f in fund_list],

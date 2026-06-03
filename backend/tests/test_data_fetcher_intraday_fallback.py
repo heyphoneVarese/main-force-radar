@@ -1,8 +1,8 @@
-"""fetch_and_store_today 的 P0 intraday fallback。
+"""fetch_and_store_today 的 intraday fallback 污染防护。
 
 场景:VPS 上 direct industry + akshare 都拿不到 daily,但 intraday 已经
-拿到了今天 14:30 的 686 行;让 daily 不再卡在昨天 — 用 intraday 当日
-latest snapshot 的 industry 行作为 sector_flow_daily 的源。
+拿到了今天 14:30 的 686 行。intraday 不是 EOD daily 真值;在不改表结构
+且没有 source 字段时,不能写入 sector_flow_daily,避免永久污染历史日线。
 
 只 industry,不 concept;intraday 不是今天则放弃;market_index_daily
 完全不受影响。
@@ -10,10 +10,8 @@ latest snapshot 的 industry 行作为 sector_flow_daily 的源。
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
-
-import pytest
 
 from src.models import IntradaySectorFlow, SectorFlowDaily
 from src.services import data_fetcher as df_mod
@@ -100,11 +98,11 @@ def test_direct_success_does_not_use_fallback(db_session):
 
 
 # =====================================================================
-# 2. direct daily 失败 + intraday 有今天数据 → fallback 成功写入
+# 2. direct daily 失败 + intraday 有今天数据 → 只诊断,不写 daily
 # =====================================================================
 
 
-def test_direct_fail_intraday_today_triggers_fallback(db_session):
+def test_direct_fail_intraday_today_does_not_persist_fallback(db_session):
     today = cn_today()
     snap = datetime(today.year, today.month, today.day, 14, 30)
     # 今日 intraday 有 3 行 industry + 2 行 concept(只有 industry 应该被复制)
@@ -126,22 +124,17 @@ def test_direct_fail_intraday_today_triggers_fallback(db_session):
     ):
         stats = df_mod.fetch_and_store_today(db_session)
 
-    assert stats["sectors_fetched"] == 3, "fallback 应该用了 3 行 industry"
-    assert stats["sectors_inserted"] == 3
-    assert stats.get("fallback_used") == "intraday_snapshot"
-    assert stats["errors"] == [], (
-        f"fallback 成功后不该再有 sector errors;实际:{stats['errors']}"
-    )
-    # 入库的 trade_date 应该是今天,只有 industry
+    assert stats["sectors_fetched"] == 0
+    assert stats["sectors_inserted"] == 0
+    assert stats.get("fallback_available") == "intraday_snapshot"
+    assert stats["fallback_rows"] == 3
+    assert len(stats["errors"]) == 1
+    assert "not persisted to daily" in stats["errors"][0]
+    # 不允许把 intraday 行写进 daily
     today_rows = db_session.query(SectorFlowDaily).filter_by(
         trade_date=today
     ).all()
-    assert len(today_rows) == 3
-    assert all(r.sector_type == "industry" for r in today_rows), (
-        "spec 红线:fallback 不许写 concept"
-    )
-    codes = sorted(r.sector_code for r in today_rows)
-    assert codes == ["BK0428", "BK0490", "BK0727"]
+    assert today_rows == []
     # market 指数不受影响
     assert stats["indices_inserted"] == 4
 
@@ -187,11 +180,11 @@ def test_direct_fail_no_today_intraday_returns_error(db_session):
 
 
 # =====================================================================
-# 4. direct fetcher 抛异常 + intraday 有今天数据 → fallback 兜底
+# 4. direct fetcher 抛异常 + intraday 有今天数据 → 不写 daily
 # =====================================================================
 
 
-def test_direct_raises_with_today_intraday_uses_fallback(db_session):
+def test_direct_raises_with_today_intraday_does_not_persist_fallback(db_session):
     today = cn_today()
     snap = datetime(today.year, today.month, today.day, 14, 30)
     db_session.add(_mk_intraday(snap, "BK0490", "半导体", 95.0))
@@ -206,10 +199,11 @@ def test_direct_raises_with_today_intraday_uses_fallback(db_session):
     ):
         stats = df_mod.fetch_and_store_today(db_session)
 
-    # 异常路径仍可被 fallback 救回来
-    assert stats["sectors_inserted"] == 1
-    assert stats.get("fallback_used") == "intraday_snapshot"
-    assert stats["errors"] == []
+    assert stats["sectors_inserted"] == 0
+    assert stats.get("fallback_available") == "intraday_snapshot"
+    assert stats["fallback_rows"] == 1
+    assert len(stats["errors"]) == 1
+    assert "not persisted to daily" in stats["errors"][0]
     assert stats["indices_inserted"] == 4
 
 
@@ -271,11 +265,11 @@ def test_fallback_only_industry_never_concept(db_session):
 
 
 # =====================================================================
-# 7. fallback 入库幂等(同日重跑 → skip)
+# 7. fallback 重跑不污染 daily
 # =====================================================================
 
 
-def test_fallback_insert_is_idempotent(db_session):
+def test_fallback_never_inserts_daily_on_rerun(db_session):
     today = cn_today()
     snap = datetime(today.year, today.month, today.day, 14, 30)
     db_session.add(_mk_intraday(snap, "BK0490", "半导体", 95.0))
@@ -291,11 +285,11 @@ def test_fallback_insert_is_idempotent(db_session):
         s1 = df_mod.fetch_and_store_today(db_session)
         s2 = df_mod.fetch_and_store_today(db_session)
 
-    assert s1["sectors_inserted"] == 1
-    assert s2["sectors_inserted"] == 0  # 同 (trade_date, sector_code) 跳过
-    # 但两次都标记了 fallback_used
-    assert s1.get("fallback_used") == "intraday_snapshot"
-    assert s2.get("fallback_used") == "intraday_snapshot"
+    assert s1["sectors_inserted"] == 0
+    assert s2["sectors_inserted"] == 0
+    assert s1.get("fallback_available") == "intraday_snapshot"
+    assert s2.get("fallback_available") == "intraday_snapshot"
+    assert db_session.query(SectorFlowDaily).filter_by(trade_date=today).all() == []
 
 
 # =====================================================================
@@ -326,3 +320,49 @@ def test_fallback_does_not_affect_market_index(db_session):
     assert n_index == 4
     assert stats["indices_fetched"] == 4
     assert stats["indices_inserted"] == 4
+
+
+def test_real_daily_can_insert_after_intraday_fallback_was_available(db_session):
+    """先 fallback 可用但不写 daily,后续真实 daily 能正常入库。"""
+    today = cn_today()
+    snap = datetime(today.year, today.month, today.day, 14, 30)
+    db_session.add(_mk_intraday(snap, "BK0490", "半导体", 95.0))
+    db_session.commit()
+
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=[],
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ):
+        fallback_stats = df_mod.fetch_and_store_today(db_session)
+
+    assert fallback_stats["sectors_inserted"] == 0
+    assert fallback_stats.get("fallback_available") == "intraday_snapshot"
+    assert db_session.query(SectorFlowDaily).filter_by(trade_date=today).all() == []
+
+    real_rows = [{
+        "trade_date": today,
+        "sector_code": "BK0490",
+        "sector_name": "半导体",
+        "sector_type": "industry",
+        "main_inflow_wan_x10000": Y(120.0),
+        "main_inflow_pct_x10000": None,
+        "change_pct_x10000": 345,
+    }]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=real_rows,
+    ), patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [_mk_index_row(code)],
+    ):
+        real_stats = df_mod.fetch_and_store_today(db_session)
+
+    assert real_stats["sectors_inserted"] == 1
+    row = db_session.query(SectorFlowDaily).filter_by(
+        trade_date=today, sector_code="BK0490"
+    ).one()
+    assert row.main_inflow_wan_x10000 == Y(120.0)
+    assert row.change_pct_x10000 == 345
