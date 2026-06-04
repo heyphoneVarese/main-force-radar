@@ -23,6 +23,7 @@ Server酱 免费版日限 5 条:工作日 4,周日 1。
 
 import logging
 from collections.abc import Callable
+from types import SimpleNamespace
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -46,6 +47,23 @@ _DAILY_FRESHNESS_GATED_PUSH_TYPES = {
     PushType.EVENING.value,
     PushType.WEEKLY.value,
 }
+
+
+def _snapshot_signal(signal):
+    """Copy Signal fields needed after the SQLAlchemy Session is closed."""
+    return SimpleNamespace(
+        trade_date=signal.trade_date,
+        signal_type=signal.signal_type,
+        target_type=signal.target_type,
+        target_code=signal.target_code,
+        signal_name=signal.signal_name,
+        description=signal.description,
+        score_x100=signal.score_x100,
+        persistence_score=signal.persistence_score,
+        main_inflow_wan_x10000=signal.main_inflow_wan_x10000,
+        triggered_at=signal.triggered_at,
+        meta=signal.meta,
+    )
 
 
 # 5 个 push cron job 配置
@@ -290,8 +308,10 @@ class SignalScheduler:
         try:
             with SessionLocal() as session:
                 engine = SignalEngine(session)
-                signals = engine.generate_signals_for_holdings()
-                engine.save_signals(signals)
+                orm_signals = engine.generate_signals_for_holdings()
+                signal_snapshots = [_snapshot_signal(s) for s in orm_signals]
+                engine.save_signals(orm_signals)
+                signals = signal_snapshots
                 holdings_by_sector = build_holdings_by_sector(session)
             logger.info(
                 "Job [%s] 信号 %d 条, 涉及 %d 板块",

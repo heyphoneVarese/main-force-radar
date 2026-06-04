@@ -3,15 +3,19 @@
 不调真实 anthropic / ServerChan,全部 mock。
 """
 
-from datetime import datetime
-from unittest.mock import patch
+from datetime import date, datetime
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from src.models import Signal
 from src.models.enums import PushType
+from src.services.ai_analyst import AIAnalyst
 from src.services.fetch_health import get_fetch_health
-from src.services.scheduler import CN_TZ, JOBS_CONFIG, SignalScheduler
+from src.services.notifier import ServerChanNotifier
+from src.services.scheduler import CN_TZ, JOBS_CONFIG, SignalScheduler, _snapshot_signal
+from src.services.signal_engine import SignalEngine
 
 # ============================================================
 # JOBS_CONFIG 静态约束(cron 时间 + push_type 一一对应)
@@ -331,6 +335,53 @@ def test_run_push_job_skips_ai_when_no_api_key():
 
     # AIAnalyst 类根本没被实例化
     assert not mock_ai_cls.called
+
+
+def test_signal_snapshots_survive_save_commit_and_closed_session(db_session):
+    """Scheduler snapshots must stay readable after save_signals commit + Session close."""
+    signal = Signal(
+        trade_date=date(2026, 6, 4),
+        signal_type="bullish",
+        target_type="sector",
+        target_code="BK0490",
+        signal_name="半导体 bullish",
+        description="test signal",
+        score_x100=800,
+        persistence_score=8,
+        main_inflow_wan_x10000=9_500_000_000,
+        meta={"source": "test"},
+    )
+
+    snapshots = [_snapshot_signal(signal)]
+    SignalEngine(db_session).save_signals([signal])
+    db_session.close()
+
+    block = MagicMock()
+    block.type = "text"
+    block.text = "AI ok"
+    response = MagicMock()
+    response.content = [block]
+    response.usage = MagicMock(input_tokens=10, output_tokens=2)
+
+    with patch("src.services.ai_analyst.anthropic.Anthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = response
+        mock_cls.return_value = mock_client
+
+        ai_text = AIAnalyst(api_key="sk-fake").analyze_signals(
+            snapshots,
+            {"BK0490": [("008281", "国泰CES半导体ETF联接A")]},
+            push_type=PushType.MIDDAY.value,
+        )
+
+    assert ai_text == "AI ok"
+    _, content = ServerChanNotifier.build_summary_markdown(
+        snapshots,
+        {"BK0490": [("008281", "国泰CES半导体ETF联接A")]},
+        as_of=date(2026, 6, 4),
+    )
+    assert "半导体" in content
+    assert "国泰CES半导体ETF联接A" in content
 
 
 # ============================================================
