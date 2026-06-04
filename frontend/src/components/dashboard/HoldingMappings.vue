@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TopFund, TopFunds } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 我的持仓映射卡(Phase 5.1 PR11)。
@@ -81,13 +82,13 @@ function scoreChipClass(score: number): string {
           <span class="inline-block w-1.5 h-4 bg-purple-500 rounded-sm"></span>
           我的持仓映射
         </h3>
-        <span
-          v-if="status === 'ready' && data?.trade_date"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          截至 {{ data.trade_date }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         根据主力资金流入板块排序 · 仅含我的持仓
       </p>

@@ -4,6 +4,7 @@ import type {
   HoldingSectorAlertsResponse,
   HoldingSectorAlertType,
 } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 持仓-板块事实提醒(PR23 + PR24.1 可展开)。把板块连续性事实 + 盘中
@@ -89,13 +90,13 @@ function toggle(code: string): void {
           <span class="inline-block w-1.5 h-4 bg-amber-500 rounded-sm"></span>
           持仓-板块事实提醒
         </h3>
-        <span
-          v-if="status === 'ready' && data?.trade_date"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          截至 {{ data.trade_date }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         把板块资金变化连接到我的持仓,不构成投资建议
       </p>

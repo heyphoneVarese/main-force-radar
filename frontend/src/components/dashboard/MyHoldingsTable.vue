@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
 import type { HoldingFactItem, HoldingFactsSummary } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 我的持仓分析(PR26 重构)— 取代情绪系统(bullish/bearish/warning/
@@ -82,17 +83,19 @@ function mappingStatusLabel(item: HoldingFactItem): string {
 
 <template>
   <section class="bg-white rounded-lg shadow-sm border overflow-hidden">
-    <header class="flex items-center justify-between px-4 py-3 border-b bg-gray-50/50">
-      <h3 class="text-base font-semibold text-gray-900 flex items-center gap-2">
-        <span class="inline-block w-1.5 h-4 bg-teal-500 rounded-sm"></span>
-        我的持仓分析
-      </h3>
-      <span
-        v-if="status === 'ready' && data?.trade_date"
-        class="text-xs text-gray-400 tabular-nums"
-      >
-        截至 {{ data.trade_date }}
-      </span>
+    <header class="px-4 py-3 border-b bg-gray-50/50">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+          <span class="inline-block w-1.5 h-4 bg-teal-500 rounded-sm"></span>
+          我的持仓分析
+        </h3>
+      </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
     </header>
 
     <div class="p-4">

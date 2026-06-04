@@ -7,8 +7,8 @@ import type { HoldingSectorAlertsResponse, TopSectors } from '../types'
 
 // Dashboard 首页(Phase 2 瘦身):只保留 3 个模块。
 //
-//   1. 今日资金流入 Top10
-//   2. 今日资金流出 Top10
+//   1. 资金流入 Top10
+//   2. 资金流出 Top10
 //   3. 我的持仓提醒
 //
 // 连续性 → /continuity;板块趋势 → /trends;持仓分析 → /holdings。
@@ -55,7 +55,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4">
-    <!-- 第 1 屏:今日 Top10 inflow + outflow -->
+    <!-- 第 1 屏:Top10 inflow + outflow -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <TodayFlowTop10
         :status="inflowStatus"

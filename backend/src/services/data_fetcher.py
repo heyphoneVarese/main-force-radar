@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models import MarketIndexDaily, SectorFlowDaily
-from src.utils.date_helper import cn_today
+from src.utils.date_helper import cn_now, cn_today
 from src.utils.money import nav_to_int, pct_to_int, wan_yuan_to_int
 
 logger = logging.getLogger(__name__)
@@ -226,8 +226,30 @@ def _fetch_sector_flow_direct(ak_sector_type: str) -> pd.DataFrame:
     return df
 
 
+_DAILY_SECTOR_CLOSE_HOUR = 15
+_DAILY_SECTOR_CLOSE_MINUTE = 0
+
+
+def _is_after_a_share_close(now=None) -> bool:
+    now = now or cn_now()
+    return (now.hour, now.minute) >= (
+        _DAILY_SECTOR_CLOSE_HOUR,
+        _DAILY_SECTOR_CLOSE_MINUTE,
+    )
+
+
+def _can_write_daily_sector_for_date(trade_date, now=None) -> bool:
+    now = now or cn_now()
+    today = now.date()
+    return (
+        today.weekday() < 5
+        and trade_date == today
+        and _is_after_a_share_close(now)
+    )
+
+
 def _fetch_sector_flow(
-    indicator: str, ak_sector_type: str, db_sector_type: str
+    indicator: str, ak_sector_type: str, db_sector_type: str, *, trade_date
 ) -> list[dict[str, Any]]:
     """通用板块资金流采集。
 
@@ -259,7 +281,6 @@ def _fetch_sector_flow(
     if df is None or df.empty:
         return []
 
-    today = cn_today()
     results: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         try:
@@ -280,7 +301,7 @@ def _fetch_sector_flow(
 
             results.append(
                 {
-                    "trade_date": today,
+                    "trade_date": trade_date,
                     "sector_code": str(code),
                     "sector_name": str(name),
                     "sector_type": db_sector_type,
@@ -303,14 +324,28 @@ def _fetch_sector_flow(
     return results
 
 
-def fetch_sector_flow_industry(indicator: str = "今日") -> list[dict[str, Any]]:
+def fetch_sector_flow_industry(
+    indicator: str = "今日", *, trade_date=None
+) -> list[dict[str, Any]]:
     """行业板块资金流。indicator: '今日' / '3日' / '5日' / '10日'。"""
-    return _fetch_sector_flow(indicator, "行业资金流", "industry")
+    return _fetch_sector_flow(
+        indicator,
+        "行业资金流",
+        "industry",
+        trade_date=trade_date or cn_today(),
+    )
 
 
-def fetch_sector_flow_concept(indicator: str = "今日") -> list[dict[str, Any]]:
+def fetch_sector_flow_concept(
+    indicator: str = "今日", *, trade_date=None
+) -> list[dict[str, Any]]:
     """概念板块资金流。indicator 同上。"""
-    return _fetch_sector_flow(indicator, "概念资金流", "concept")
+    return _fetch_sector_flow(
+        indicator,
+        "概念资金流",
+        "concept",
+        trade_date=trade_date or cn_today(),
+    )
 
 
 # =====================================================================
@@ -593,23 +628,68 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
         "errors": [],
     }
 
-    # 1. 行业资金流 — 主路径(direct → akshare)
-    sector_rows: list[dict[str, Any]] = []
-    upstream_err: str | None = None
-    try:
-        sector_rows = fetch_sector_flow_industry()
-        stats["sectors_fetched"] = len(sector_rows)
-        if not sector_rows:
-            upstream_err = (
-                "returned 0 rows "
-                "(direct + akshare fallback both failed; check container "
-                "logs for 'fetch [...] failed after 3 attempts')"
-            )
-    except Exception as e:
-        upstream_err = f"{type(e).__name__}: {e}"
-        logger.error(
-            "fetch_and_store_today: sector_flow_industry %s", upstream_err,
+    # 1. 先采 4 大市场指数,用上游真实 trade_date 验证今日是否为 A 股交易日。
+    verified_trade_date = None
+    for code, name in DEFAULT_INDICES:
+        try:
+            index_rows = fetch_market_index(code)
+            stats["indices_fetched"] += len(index_rows)
+            if index_rows:
+                latest_index_date = max(r["trade_date"] for r in index_rows)
+                if verified_trade_date is None or latest_index_date > verified_trade_date:
+                    verified_trade_date = latest_index_date
+                stats["indices_inserted"] += insert_market_index_rows(
+                    session, index_rows, index_name=name
+                )
+            else:
+                stats["errors"].append(
+                    f"market_index[{code}/{name}]: returned 0 rows (retries exhausted)"
+                )
+        except Exception as e:
+            msg = f"market_index[{code}/{name}]: {type(e).__name__}: {e}"
+            logger.error("fetch_and_store_today: %s", msg)
+            stats["errors"].append(msg)
+
+    if verified_trade_date is None:
+        stats["errors"].append(
+            "sector_flow_industry: no verified market trade_date; skip daily sector write"
         )
+        sector_rows: list[dict[str, Any]] = []
+        upstream_err: str | None = "no verified market trade_date"
+    elif not _can_write_daily_sector_for_date(verified_trade_date):
+        stats["errors"].append(
+            "sector_flow_industry: verified market trade_date "
+            f"{verified_trade_date} is not writable for today {cn_today()} "
+            "(non-trading day, before close, or upstream not updated); "
+            "skip daily sector write"
+        )
+        sector_rows = []
+        upstream_err = f"verified trade_date {verified_trade_date} not writable"
+    else:
+        sector_rows = []
+        upstream_err = None
+
+    # 2. 行业资金流 — 主路径(direct → akshare),只在交易日收盘后且
+    # 市场指数确认今日 trade_date 后写入 sector_flow_daily。
+    if verified_trade_date is not None and _can_write_daily_sector_for_date(
+        verified_trade_date
+    ):
+        try:
+            sector_rows = fetch_sector_flow_industry(
+                trade_date=verified_trade_date
+            )
+            stats["sectors_fetched"] = len(sector_rows)
+            if not sector_rows:
+                upstream_err = (
+                    "returned 0 rows "
+                    "(direct + akshare fallback both failed; check container "
+                    "logs for 'fetch [...] failed after 3 attempts')"
+                )
+        except Exception as e:
+            upstream_err = f"{type(e).__name__}: {e}"
+            logger.error(
+                "fetch_and_store_today: sector_flow_industry %s", upstream_err,
+            )
 
     # 1.1 P0 guard:主路径拿不到时只诊断 intraday 可用性,不写入 daily。
     # 没有 source 字段时,把盘中累计值写进 sector_flow_daily 会永久污染
@@ -648,25 +728,6 @@ def fetch_and_store_today(session: Session) -> dict[str, int]:
             f"sector_flow_industry: {upstream_err or 'returned 0 rows'}; "
             f"{fallback_msg}"
         )
-
-    # 2. 4 大市场指数
-    for code, name in DEFAULT_INDICES:
-        try:
-            index_rows = fetch_market_index(code)
-            stats["indices_fetched"] += len(index_rows)
-            if index_rows:
-                stats["indices_inserted"] += insert_market_index_rows(
-                    session, index_rows, index_name=name
-                )
-            else:
-                # 同 sectors:fetcher 静默返空也要让上游看见
-                stats["errors"].append(
-                    f"market_index[{code}/{name}]: returned 0 rows (retries exhausted)"
-                )
-        except Exception as e:
-            msg = f"market_index[{code}/{name}]: {type(e).__name__}: {e}"
-            logger.error("fetch_and_store_today: %s", msg)
-            stats["errors"].append(msg)
 
     # P0 fix:静默失败必须升级为 ERROR,否则上游"job executed successfully"
     # 会把数据丢失伪装成正常。inserted=0 + errors 非空 → ERROR;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DashboardRadarResponse } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 主力雷达 — 盘中实时(PR16)。
@@ -16,11 +17,6 @@ defineProps<{
   data: DashboardRadarResponse | null
   error: string
 }>()
-
-function fmtClock(iso: string | null): string {
-  if (!iso) return ''
-  return iso.slice(11, 16)
-}
 
 function fmtYi(yi: string | null | undefined): string {
   // 后端已经返回亿元 Decimal,前端直接显示
@@ -83,13 +79,13 @@ function badgeClass(badge: string): string {
           <span class="inline-block w-1.5 h-4 bg-rose-500 rounded-sm"></span>
           主力雷达 · 盘中实时
         </h3>
-        <span
-          v-if="status === 'ready' && data?.snapshot_time"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          更新时间 {{ fmtClock(data.snapshot_time) }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         板块资金 → 基金映射 · 非投资建议
       </p>

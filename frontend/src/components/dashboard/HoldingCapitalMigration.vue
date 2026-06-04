@@ -3,6 +3,7 @@ import type {
   HoldingCapitalMigrationItem,
   HoldingsCapitalMigrationResponse,
 } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 defineProps<{
@@ -57,6 +58,12 @@ function badgeClass(item: HoldingCapitalMigrationItem): string {
         <span class="inline-block w-1.5 h-4 bg-teal-500 rounded-sm"></span>
         持仓主线资金变化
       </h3>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         资金状态变化。仅展示最近20个交易日历史资金事实，不构成投资建议。
       </p>

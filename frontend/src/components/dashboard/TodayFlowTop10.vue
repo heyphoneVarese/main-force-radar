@@ -2,9 +2,10 @@
 import { computed } from 'vue'
 import type { FlowOrder } from '../../api/client'
 import type { TopSectors } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
-// 今日资金 Top10 卡(Dashboard 重构 — 沿用 /sectors/top,order=inflow|outflow)。
+// 资金 Top10 卡(Dashboard 重构 — 沿用 /sectors/top,order=inflow|outflow)。
 //
 // 原则:只显示客观计数 + 资金数额(亿元)。
 // 不显示:评分 / 健康度 / 买卖建议 / 预测内容。
@@ -54,15 +55,15 @@ function inflowColor(wanStr: string | null | undefined): string {
             class="inline-block w-1.5 h-4 rounded-sm"
             :class="order === 'inflow' ? 'bg-red-500' : 'bg-green-500'"
           ></span>
-          {{ order === 'inflow' ? '今日资金流入' : '今日资金流出' }} Top10
+          {{ order === 'inflow' ? '资金流入' : '资金流出' }} Top10
         </h3>
-        <span
-          v-if="status === 'ready' && data?.trade_date"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          截至 {{ data.trade_date }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
     </header>
 
     <div class="p-4">

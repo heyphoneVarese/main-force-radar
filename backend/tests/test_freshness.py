@@ -281,11 +281,16 @@ def _seed_minimal(db_session):
 
 
 _ENDPOINTS_WITH_FRESHNESS = [
+    "/api/dashboard/market",
     "/api/dashboard/sectors/top",
     "/api/dashboard/sectors/persistence",
+    "/api/dashboard/sectors/persistence/leaders",
     "/api/dashboard/sector-trends",
+    "/api/dashboard/intraday/sectors/top",
     "/api/dashboard/holding-sector-alerts",
     "/api/dashboard/holdings-facts",
+    "/api/dashboard/capital-migration",
+    "/api/dashboard/holdings/capital-migration",
     "/api/dashboard/funds/top",
     "/api/dashboard/radar",
     "/api/dashboard/ai-summary",
@@ -301,7 +306,18 @@ def test_endpoint_includes_freshness_field(_seed_minimal, client, path):
     f = body["freshness"]
     assert isinstance(f["is_fresh"], bool)
     assert f["source"] in ("intraday", "daily", "market")
+    assert f["source_type"] in ("intraday", "daily_close", "cached", "stale")
+    assert "data_date" in f
+    assert "data_time" in f
+    assert "updated_at" in f
     assert isinstance(f["reason"], str) and len(f["reason"]) > 0
+    assert "time_meta" in body, f"{path} 缺 time_meta 字段"
+    tm = body["time_meta"]
+    assert tm["source_type"] in ("intraday", "daily_close", "cached", "stale")
+    assert isinstance(tm["is_fresh"], bool)
+    assert "data_date" in tm
+    assert "data_time" in tm
+    assert "updated_at" in tm
 
 
 def test_endpoint_freshness_marks_stale_when_old_data(db_session, client):

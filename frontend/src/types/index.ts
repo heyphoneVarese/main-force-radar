@@ -58,9 +58,22 @@ export interface FundCreate {
 // 黄色 stale banner(StaleBanner.vue),但内容仍正常渲染。
 export interface FreshnessInfo {
   is_fresh: boolean
-  source: 'intraday' | 'daily' | 'market'
+  source: 'intraday' | 'daily' | 'market' | 'daily_close'
   latest_time: string | null     // ISO datetime
   age_minutes: number | null     // intraday only
+  reason: string
+  data_date: string | null
+  data_time: string | null
+  source_type: 'intraday' | 'daily_close' | 'cached' | 'stale'
+  updated_at: string | null
+}
+
+export interface TimeMeta {
+  data_date: string | null
+  data_time: string | null
+  source_type: 'intraday' | 'daily_close' | 'cached' | 'stale'
+  updated_at: string | null
+  is_fresh: boolean
   reason: string
 }
 
@@ -76,6 +89,8 @@ export interface MarketIndex {
 export interface MarketSnapshot {
   trade_date: string | null
   indices: MarketIndex[]
+  freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 export interface SectorFlow {
@@ -93,6 +108,7 @@ export interface TopSectors {
   sector_type: 'industry' | 'concept' | 'all'
   sectors: SectorFlow[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // PR20 + PR21:板块连续天数事实(R3:全部是客观计数,不是评分)
@@ -126,6 +142,7 @@ export interface SectorPersistenceResponse {
   sector_type: 'industry' | 'concept' | 'all'
   items: SectorPersistenceItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // PR22:连续Top20排行榜单条(spec)
@@ -163,6 +180,8 @@ export interface SectorPersistenceLeadersResponse {
   // Dashboard 重构:排序轴
   sort_by: 'continuous_top20' | 'continuous_inflow' | 'continuous_outflow'
   items: SectorPersistenceLeaderItem[]
+  freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // PR23:持仓-板块事实预警单条
@@ -204,6 +223,7 @@ export interface HoldingSectorAlertsResponse {
   snapshot_time: string | null                 // ISO datetime;intraday 空 → null
   items: HoldingSectorAlertItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // PR25:20 天资金趋势(每条板块 = leaders 选出的对象 + 历史亿元序列)
@@ -223,6 +243,7 @@ export interface SectorTrendsResponse {
   sector_type: 'industry' | 'concept' | 'all'
   items: SectorTrendItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // Phase 6 V1:资金状态变化。只展示最近 20 个交易日历史资金事实。
@@ -267,6 +288,7 @@ export interface CapitalMigrationResponse {
   weak_to_strong: CapitalMigrationSectorItem[]
   strong_to_weak: CapitalMigrationSectorItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 export interface HoldingCapitalMigrationItem {
@@ -296,6 +318,7 @@ export interface HoldingsCapitalMigrationResponse {
   is_partial_window: boolean
   holdings: HoldingCapitalMigrationItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // PR26:持仓-事实摘要(替换旧情绪系统 HoldingsSummary)
@@ -343,6 +366,7 @@ export interface HoldingFactsSummary {
   buckets: HoldingFactsBuckets
   holdings: HoldingFactItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 export interface IntradayTopSectors {
@@ -350,6 +374,8 @@ export interface IntradayTopSectors {
   snapshot_time: string | null   // ISO datetime;最新 snapshot 时刻
   sector_type: 'industry' | 'concept' | 'all'
   sectors: SectorFlow[]
+  freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 export interface HoldingSignal {
@@ -395,6 +421,7 @@ export interface TopFunds {
   trade_date: string | null
   funds: TopFund[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 export interface SectorBriefItem {
@@ -421,6 +448,7 @@ export interface AISummary {
 
   // P0 fix
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }
 
 // ===== 主力雷达(PR16)=====
@@ -449,4 +477,5 @@ export interface DashboardRadarResponse {
   holdings: RadarFundItem[]
   candidates: RadarFundItem[]
   freshness: FreshnessInfo
+  time_meta: TimeMeta
 }

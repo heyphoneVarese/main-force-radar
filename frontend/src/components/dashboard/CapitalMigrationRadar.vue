@@ -3,6 +3,7 @@ import type {
   CapitalMigrationResponse,
   CapitalMigrationSectorItem,
 } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 defineProps<{
@@ -54,6 +55,12 @@ const groups: Array<{
         <span class="inline-block w-1.5 h-4 bg-cyan-500 rounded-sm"></span>
         资金迁移雷达
       </h3>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         资金状态变化。仅展示最近20个交易日历史资金事实，不构成投资建议。
       </p>
@@ -67,7 +74,7 @@ const groups: Array<{
       </p>
       <template v-else-if="data">
         <div class="text-xs text-gray-500 mb-3">
-          截至 {{ data.trade_date ?? '--' }}，样本 {{ data.sample_days }}/{{ data.window }} 个交易日
+          样本 {{ data.sample_days }}/{{ data.window }} 个交易日
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">

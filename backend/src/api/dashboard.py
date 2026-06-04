@@ -52,6 +52,7 @@ from src.schemas.dashboard import (
     SectorPersistenceResponse,
     SectorTrendItem,
     SectorTrendsResponse,
+    TimeMeta,
     TopFundResponse,
     TopFundsResponse,
     TopSectorsResponse,
@@ -68,6 +69,7 @@ from src.services.fetch_health import get_fetch_health
 from src.services.freshness import (
     assess_daily_freshness,
     assess_intraday_freshness,
+    assess_market_freshness,
 )
 from src.services.holding_facts import build_holding_facts
 from src.services.holding_sector_alerts import build_holding_sector_alerts
@@ -96,6 +98,21 @@ def _daily_freshness(db: Session) -> FreshnessInfo:
 
 def _intraday_freshness(db: Session) -> FreshnessInfo:
     return FreshnessInfo(**assess_intraday_freshness(db))
+
+
+def _market_freshness(db: Session) -> FreshnessInfo:
+    return FreshnessInfo(**assess_market_freshness(db))
+
+
+def _time_meta(freshness: FreshnessInfo) -> TimeMeta:
+    return TimeMeta(
+        data_date=freshness.data_date,
+        data_time=freshness.data_time,
+        source_type=freshness.source_type,
+        updated_at=freshness.updated_at,
+        is_fresh=freshness.is_fresh,
+        reason=freshness.reason,
+    )
 
 
 @router.get("/fetch-health", response_model=FetchHealthResponse)
@@ -228,8 +245,14 @@ def get_market_snapshot(db: Session = Depends(get_session)) -> MarketSnapshotRes
             extra_indices.append(_to_index_response_from_dict(d))
 
     all_indices = db_indices + extra_indices
+    freshness = _market_freshness(db)
     if not all_indices:
-        return MarketSnapshotResponse(trade_date=None, indices=[])
+        return MarketSnapshotResponse(
+            trade_date=None,
+            indices=[],
+            freshness=freshness,
+            time_meta=_time_meta(freshness),
+        )
 
     # 按 DASHBOARD_DISPLAY_INDICES 排;未知 code 排到末尾
     order_map = {code: i for i, (code, _) in enumerate(DASHBOARD_DISPLAY_INDICES)}
@@ -245,6 +268,8 @@ def get_market_snapshot(db: Session = Depends(get_session)) -> MarketSnapshotRes
     return MarketSnapshotResponse(
         trade_date=trade_date_val,
         indices=rows_sorted,
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -301,9 +326,11 @@ def get_top_sectors(
         .limit(1)
     )
     if latest_date is None:
+        freshness = _daily_freshness(db)
         return TopSectorsResponse(
             trade_date=None, sector_type=sector_type, sectors=[],
-            freshness=_daily_freshness(db),
+            freshness=freshness,
+            time_meta=_time_meta(freshness),
         )
 
     stmt = select(SectorFlowDaily).where(SectorFlowDaily.trade_date == latest_date)
@@ -316,11 +343,13 @@ def get_top_sectors(
     stmt = stmt.limit(n)
 
     rows = db.scalars(stmt).all()
+    freshness = _daily_freshness(db)
     return TopSectorsResponse(
         trade_date=latest_date,
         sector_type=sector_type,
         sectors=[_to_sector_response(r, i + 1) for i, r in enumerate(rows)],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -406,11 +435,13 @@ def get_sector_persistence(
     空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
     """
     raw = build_sector_persistence(db, n=n, sector_type=sector_type)
+    freshness = _daily_freshness(db)
     return SectorPersistenceResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_persistence_item(it) for it in raw["items"]],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -484,12 +515,15 @@ def get_sector_persistence_leaders(
     raw = build_persistence_leaders(
         db, n=n, sector_type=sector_type, min_days=min_days, sort_by=sort_by,
     )
+    freshness = _daily_freshness(db)
     return SectorPersistenceLeadersResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         min_days=raw["min_days"],
         sort_by=raw["sort_by"],
         items=[_to_leader_item(it) for it in raw["items"]],
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -540,11 +574,13 @@ def get_sector_trends(
     空库 → {"trade_date": null, "sector_type": <param>, "items": []} + 200
     """
     raw = build_sector_trends(db, n=n, sector_type=sector_type)
+    freshness = _daily_freshness(db)
     return SectorTrendsResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
         items=[_to_trend_item(it) for it in raw["items"]],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -598,6 +634,7 @@ def get_capital_migration(
     raw = build_capital_migration(
         db, window=window, sector_type=sector_type, n=n
     )
+    freshness = _daily_freshness(db)
     return CapitalMigrationResponse(
         trade_date=raw["trade_date"],
         sector_type=raw["sector_type"],
@@ -618,7 +655,8 @@ def get_capital_migration(
             _to_capital_migration_sector_item(it)
             for it in raw["strong_to_weak"]
         ],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -661,6 +699,7 @@ def get_holdings_capital_migration(
     not_applicable 只展示状态。
     """
     raw = build_holdings_capital_migration(db, window=window)
+    freshness = _daily_freshness(db)
     return HoldingsCapitalMigrationResponse(
         trade_date=raw["trade_date"],
         window=raw["window"],
@@ -670,7 +709,8 @@ def get_holdings_capital_migration(
             _to_holding_capital_migration_item(it)
             for it in raw["holdings"]
         ],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -697,12 +737,15 @@ def get_intraday_top_sectors(
         .order_by(IntradaySectorFlow.snapshot_time.desc())
         .limit(1)
     )
+    freshness = _intraday_freshness(db)
     if latest_snapshot is None:
         return IntradayTopSectorsResponse(
             trade_date=None,
             snapshot_time=None,
             sector_type=sector_type,
             sectors=[],
+            freshness=freshness,
+            time_meta=_time_meta(freshness),
         )
 
     stmt = select(IntradaySectorFlow).where(
@@ -728,6 +771,8 @@ def get_intraday_top_sectors(
             _to_intraday_sector_response(r, i + 1)
             for i, r in enumerate(rows)
         ],
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -781,13 +826,15 @@ def get_dashboard_radar(
     - 空库 → mode='intraday', trade_date=null, snapshot_time=null, [], []
     """
     raw = build_intraday_radar(db, n=n)
+    freshness = _intraday_freshness(db)
     return DashboardRadarResponse(
         mode=raw["mode"],
         trade_date=raw["trade_date"],
         snapshot_time=raw["snapshot_time"],
         holdings=[_to_radar_item(h) for h in raw["holdings"]],
         candidates=[_to_radar_item(c) for c in raw["candidates"]],
-        freshness=_intraday_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -903,12 +950,14 @@ def get_holdings_facts(
     空持仓 → 200 + buckets 全 0 + holdings=[]。
     """
     raw = build_holding_facts(db)
+    freshness = _daily_freshness(db)
     return HoldingFactsSummaryResponse(
         trade_date=raw["trade_date"],
         snapshot_time=raw["snapshot_time"],
         buckets=HoldingFactsBuckets(**raw["buckets"]),
         holdings=[_to_holding_fact_item(h) for h in raw["holdings"]],
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -963,10 +1012,12 @@ def get_top_funds(
         )
         for f in raw["funds"]
     ]
+    freshness = _daily_freshness(db)
     return TopFundsResponse(
         trade_date=raw["trade_date"],
         funds=funds_response,
-        freshness=_daily_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -1016,6 +1067,7 @@ def get_ai_summary(db: Session = Depends(get_session)) -> AISummaryResponse:
         summary=raw["summary"],
         generated_at=raw["generated_at"],
         freshness=freshness,
+        time_meta=_time_meta(freshness),
     )
 
 
@@ -1079,10 +1131,12 @@ def get_holding_sector_alerts(
       但 C/D 类预警仍可生成
     """
     raw = build_holding_sector_alerts(db, n=n)
+    freshness = _intraday_freshness(db)
     return HoldingSectorAlertsResponse(
         trade_date=raw["trade_date"],
         snapshot_time=raw["snapshot_time"],
         items=[_to_alert_item(it) for it in raw["items"]],
         # alerts 主要看盘中信号,优先汇报 intraday 新鲜度
-        freshness=_intraday_freshness(db),
+        freshness=freshness,
+        time_meta=_time_meta(freshness),
     )

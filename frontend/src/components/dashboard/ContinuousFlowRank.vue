@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { SectorPersistenceLeadersResponse } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
+import StaleBanner from './StaleBanner.vue'
 
 // 连续流入 / 连续流出 排行卡(Dashboard 重构)。
 //
@@ -46,13 +48,13 @@ function daysOf(item: { continuous_inflow_days: number; continuous_outflow_days:
           ></span>
           {{ direction === 'inflow' ? '连续流入排行' : '连续流出排行' }}
         </h3>
-        <span
-          v-if="status === 'ready' && data?.trade_date"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          截至 {{ data.trade_date }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         基于 sector_flow_daily 历史
         {{ data?.min_days !== undefined ? `· ≥${data.min_days}天` : '' }}
@@ -60,6 +62,7 @@ function daysOf(item: { continuous_inflow_days: number; continuous_outflow_days:
     </header>
 
     <div class="p-4">
+      <StaleBanner :freshness="data?.freshness" />
       <p v-if="status === 'loading'" class="text-gray-400 text-sm">加载中...</p>
       <p v-else-if="status === 'error'" class="text-red-500 text-sm">
         ⚠ {{ error }}

@@ -39,6 +39,33 @@ class FreshnessInfo(BaseModel):
     reason: str = Field(
         description="人类可读的判定原因(对开发/运维诊断有用)"
     )
+    data_date: date | None = Field(
+        default=None,
+        description="数据所属日期;daily_close=trade_date,intraday=snapshot 日期"
+    )
+    data_time: str | None = Field(
+        default=None,
+        description="数据所属时间;intraday 为 HH:MM,daily_close 通常为 null"
+    )
+    source_type: str = Field(
+        default="stale",
+        description="intraday / daily_close / cached / stale"
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        description="本地入库/生成更新时间;无行时为 null"
+    )
+
+
+class TimeMeta(BaseModel):
+    """统一数据时间元信息。保留各响应旧字段,新增本字段给前端统一展示。"""
+
+    data_date: date | None = Field(default=None)
+    data_time: str | None = Field(default=None)
+    source_type: str = Field(description="intraday / daily_close / cached / stale")
+    updated_at: datetime | None = Field(default=None)
+    is_fresh: bool
+    reason: str
 
 
 class MarketIndexResponse(BaseModel):
@@ -73,6 +100,12 @@ class MarketSnapshotResponse(BaseModel):
     )
     indices: list[MarketIndexResponse] = Field(
         description="按 data_fetcher.DEFAULT_INDICES 顺序排列;最多 4 条"
+    )
+    freshness: FreshnessInfo = Field(
+        description="市场指数数据新鲜度"
+    )
+    time_meta: TimeMeta = Field(
+        description="统一数据时间元信息"
     )
 
 
@@ -114,6 +147,7 @@ class TopSectorsResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);is_fresh=False 时前端显示提示"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class HoldingSignalResponse(BaseModel):
@@ -238,6 +272,7 @@ class TopFundsResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估;来自 sector_flow_daily"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class FetchHealthResponse(BaseModel):
@@ -274,6 +309,10 @@ class IntradayTopSectorsResponse(BaseModel):
     sectors: list[SectorFlowResponse] = Field(
         description="按 main_inflow_wan 降序排;最多 n 条(默认 20)"
     )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估;来自 intraday_sector_flow"
+    )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class SectorPersistenceItem(BaseModel):
@@ -360,6 +399,7 @@ class SectorPersistenceResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);is_fresh=False 时前端显示提示"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class SectorPersistenceLeaderItem(BaseModel):
@@ -438,6 +478,10 @@ class SectorPersistenceLeadersResponse(BaseModel):
     items: list[SectorPersistenceLeaderItem] = Field(
         description="按 sort_by 轴排;最多 n 条(过滤后不足 n 时显示实际条数)"
     )
+    freshness: FreshnessInfo = Field(
+        description="数据新鲜度评估;来自 sector_flow_daily"
+    )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class RadarFundItem(BaseModel):
@@ -500,6 +544,7 @@ class DashboardRadarResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);来自 intraday_sector_flow"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 class SectorBriefItem(BaseModel):
@@ -572,6 +617,7 @@ class AISummaryResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);跟随 source 选 intraday 或 daily"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 # =====================================================================
@@ -673,6 +719,7 @@ class HoldingSectorAlertsResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);本端点优先汇报 intraday 状态"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 # =====================================================================
@@ -720,6 +767,7 @@ class SectorTrendsResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);来自 sector_flow_daily"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")
 
 
 # =====================================================================
@@ -774,6 +822,7 @@ class CapitalMigrationResponse(BaseModel):
     weak_to_strong: list[CapitalMigrationSectorItem]
     strong_to_weak: list[CapitalMigrationSectorItem]
     freshness: FreshnessInfo
+    time_meta: TimeMeta
 
 
 class HoldingCapitalMigrationItem(BaseModel):
@@ -812,6 +861,7 @@ class HoldingsCapitalMigrationResponse(BaseModel):
     is_partial_window: bool
     holdings: list[HoldingCapitalMigrationItem]
     freshness: FreshnessInfo
+    time_meta: TimeMeta
 
 
 # =====================================================================
@@ -941,3 +991,4 @@ class HoldingFactsSummaryResponse(BaseModel):
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);来自 sector_flow_daily(主数据源)"
     )
+    time_meta: TimeMeta = Field(description="统一数据时间元信息")

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { SectorTrendItem, SectorTrendsResponse } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 第 3 部分:板块详情(默认收起,点击展开 20 天 sparkline + 表格)。
@@ -81,6 +82,12 @@ function barsFor(item: SectorTrendItem): BarMeta[] {
         <span class="inline-block w-1.5 h-4 bg-sky-500 rounded-sm"></span>
         板块详情(20日资金历史)
       </h3>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         默认收起,点击展开查看该板块最近 20 天净流入序列
       </p>

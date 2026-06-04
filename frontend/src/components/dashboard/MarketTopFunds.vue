@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TopFunds } from '../../types'
+import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 主线关联基金候选(Phase 5.1 PR12)。
@@ -55,13 +56,13 @@ function scoreChipClass(score: number): string {
           <span class="inline-block w-1.5 h-4 bg-amber-500 rounded-sm"></span>
           主线关联基金候选
         </h3>
-        <span
-          v-if="status === 'ready' && data?.trade_date"
-          class="text-xs text-gray-400 tabular-nums"
-        >
-          截至 {{ data.trade_date }}
-        </span>
       </div>
+      <DataTimeBadge
+        v-if="status === 'ready'"
+        class="mt-1"
+        :time-meta="data?.time_meta"
+        :freshness="data?.freshness"
+      />
       <p class="text-xs text-gray-500 mt-1">
         按高置信主题映射与板块资金排序，非基金净值涨幅排名
       </p>

@@ -1,11 +1,14 @@
 """data_fetcher 测试 — 用 mock 隔离 akshare 网络调用,保证 CI 快/稳/无网。"""
 
+from datetime import date as _date
+from datetime import datetime as _datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
 
 from src.services import data_fetcher as df_mod
+from src.utils.date_helper import cn_today
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +57,7 @@ def fake_sector_df() -> pd.DataFrame:
 
 @pytest.fixture
 def fake_index_df() -> pd.DataFrame:
-    """sina stock_zh_index_daily 实际返回的列:date / open / high / low / close / volume(无 amount)。"""
+    """sina 返回 date/open/high/low/close/volume,无 amount。"""
     return pd.DataFrame(
         [
             {"date": "2026-05-23", "open": 3090.0, "high": 3110.0, "low": 3080.0,
@@ -241,7 +244,11 @@ def test_direct_single_page_returns_renamed_dataframe():
         df = df_mod._fetch_sector_flow_direct("行业资金流")
 
     # 列名映射:f12/f14/f3/f62/f184 → 中文
-    assert set(["名称", "代码", "今日涨跌幅", "今日主力净流入-净额", "今日主力净流入-净占比"]).issubset(
+    expected_cols = [
+        "名称", "代码", "今日涨跌幅",
+        "今日主力净流入-净额", "今日主力净流入-净占比",
+    ]
+    assert set(expected_cols).issubset(
         set(df.columns)
     )
     assert len(df) == 2
@@ -423,13 +430,10 @@ def test_fetch_sector_flow_industry_falls_back_to_akshare_when_direct_fails(
 # fetch_and_store_today + insert helpers(Phase 4.x daily_fetch 用)
 # =====================================================================
 
-from datetime import date as _date
-
-
 def _mk_sector_row(sector_code: str, name: str, inflow_yi: float, change_pct: float):
     """构造一个 sector_flow_daily 入库 dict。"""
     return {
-        "trade_date": _date(2026, 5, 27),
+        "trade_date": cn_today(),
         "sector_code": sector_code,
         "sector_name": name,
         "sector_type": "industry",
@@ -444,11 +448,78 @@ def _mk_index_row(code: str):
     return {
         "index_code": code,
         "index_name": code,
-        "trade_date": _date(2026, 5, 27),
+        "trade_date": cn_today(),
         "close_x10000": 41129000,
         "change_pct_x10000": 87,
         "turnover_wan_x10000": None,
     }
+
+
+def test_fetch_and_store_today_skips_sector_before_close(db_session, monkeypatch):
+    """未收盘时不允许把 sector daily 写成今天。"""
+    monkeypatch.setattr(
+        df_mod, "cn_now", lambda: _datetime(2026, 6, 4, 14, 30)
+    )
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ) as mock_sector, patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [{**_mk_index_row(code), "trade_date": _date(2026, 6, 4)}],
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert mock_sector.call_count == 0
+    assert stats["sectors_inserted"] == 0
+    assert "not writable" in " ".join(stats["errors"])
+    assert db_session.query(df_mod.SectorFlowDaily).count() == 0
+
+
+def test_fetch_and_store_today_skips_sector_on_non_trading_day(
+    db_session, monkeypatch
+):
+    """周末即使系统日期是今天,也不写 sector daily。"""
+    monkeypatch.setattr(
+        df_mod, "cn_now", lambda: _datetime(2026, 6, 6, 16, 0)
+    )
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ) as mock_sector, patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [{**_mk_index_row(code), "trade_date": _date(2026, 6, 6)}],
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert mock_sector.call_count == 0
+    assert stats["sectors_inserted"] == 0
+    assert "not writable" in " ".join(stats["errors"])
+    assert db_session.query(df_mod.SectorFlowDaily).count() == 0
+
+
+def test_fetch_and_store_today_skips_sector_when_market_date_is_old(
+    db_session, monkeypatch
+):
+    """指数真实交易日不是今天时,不能把 sector 旧数据写成今天。"""
+    monkeypatch.setattr(
+        df_mod, "cn_now", lambda: _datetime(2026, 6, 4, 16, 0)
+    )
+    sector_rows = [_mk_sector_row("BK0490", "半导体", 95.0, 0.0234)]
+    with patch(
+        "src.services.data_fetcher.fetch_sector_flow_industry",
+        return_value=sector_rows,
+    ) as mock_sector, patch(
+        "src.services.data_fetcher.fetch_market_index",
+        side_effect=lambda code: [{**_mk_index_row(code), "trade_date": _date(2026, 6, 3)}],
+    ):
+        stats = df_mod.fetch_and_store_today(db_session)
+
+    assert mock_sector.call_count == 0
+    assert stats["sectors_inserted"] == 0
+    assert "not writable" in " ".join(stats["errors"])
+    assert db_session.query(df_mod.SectorFlowDaily).count() == 0
 
 
 def test_insert_sector_flow_rows_inserts_new(db_session):
