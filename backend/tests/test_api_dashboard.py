@@ -954,17 +954,36 @@ def seed_top_funds(db_session):
 def test_funds_top_orders_by_via_inflow_desc(client, seed_top_funds):
     body = client.get("/api/dashboard/funds/top").json()
     assert body["trade_date"] == "2026-05-30"
-    assert [f["fund_code"] for f in body["funds"]] == ["F_STRONG", "F_MID", "F_WEAK"]
-    assert [f["rank"] for f in body["funds"]] == [1, 2, 3]
+    assert [f["fund_code"] for f in body["funds"]] == ["F_STRONG", "F_MID"]
+    assert [f["rank"] for f in body["funds"]] == [1, 2]
 
 
-def test_funds_top_negative_inflow_sinks_to_bottom(client, seed_top_funds):
-    """负流入基金排在末位。"""
+def test_funds_top_negative_inflow_excluded(client, seed_top_funds):
+    """负流入基金不进入最强候选。"""
     body = client.get("/api/dashboard/funds/top").json()
-    last = body["funds"][-1]
-    assert last["fund_code"] == "F_WEAK"
-    assert Decimal(last["main_inflow_wan"]) == Decimal("-180000")
-    assert Decimal(last["change_pct"]) == Decimal("-0.015")
+    codes = [f["fund_code"] for f in body["funds"]]
+    assert "F_WEAK" not in codes
+    assert all(Decimal(f["main_inflow_wan"]) > 0 for f in body["funds"])
+
+
+def test_funds_top_all_negative_returns_empty(db_session, client):
+    """全部 verified 映射都是净流出时,返回空列表。"""
+    d = date(2026, 5, 30)
+    db_session.add_all([
+        _mk_fund("F_A", "通信基金", related_sectors=["通信服务"]),
+        _mk_fund("F_B", "AI 基金", related_sectors=["人工智能"]),
+        _mk_alias("通信服务", "BK0448", "通信服务"),
+        _mk_alias("人工智能", "BK0739", "人工智能"),
+        _mk_flow_row("BK0448", "通信服务", d, -6_600_000_000),
+        _mk_flow_row("BK0739", "人工智能", d, -7_400_000_000),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/funds/top").json()
+    assert body["trade_date"] == "2026-05-30"
+    assert body["funds"] == []
+    assert "freshness" in body
+    assert "time_meta" in body
 
 
 def test_funds_top_respects_n_param(client, seed_top_funds):
@@ -991,6 +1010,8 @@ def test_funds_top_returns_explicit_mapping_fields(client, seed_top_funds):
     assert top["mapping_confidence"] == 1.0
     assert top["mapping_status"] == "verified"
     assert top["mapping_source"] == "sector_aliases"
+    assert "freshness" in body
+    assert "time_meta" in body
 
 
 def test_funds_top_excludes_low_confidence_mapping_from_ranking(

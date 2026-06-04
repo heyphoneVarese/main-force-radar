@@ -15,6 +15,7 @@ score:SignalEngine.calculate_persistence_score(via_sector).total — 0-9,
 - funds.related_sectors 为空(QDII / 指数 / 债基)
 - 全部 mapped 标签 → 无 BK code(sector_aliases 显式无对应)
 - mapped BK 都没有当日 sector_flow_daily 数据
+- verified mapped BK 当日 main_inflow_wan <= 0
 理由:"最强 N 基金"是排行榜,无数据不上榜;占位用 null 会让前端逻辑变重。
 
 R 线兼容:只读 funds / sector_aliases / sector_flow_daily / signals(给
@@ -97,13 +98,19 @@ def build_top_funds(
         matched_flows = [
             (code, flows_by_code[code]) for code in bk_codes if code in flows_by_code
         ]
-        if not matched_flows:
+        positive_flows = [
+            (code, flow)
+            for code, flow in matched_flows
+            if flow.main_inflow_wan_x10000 > 0
+        ]
+        if not positive_flows:
             # 过滤策略:无映射 / 无当日数据 → 不上榜
+            # 或全部 verified 映射板块都是净流出/持平 → 不进入"最强候选"
             continue
 
-        # via_sector = 净流入最大的那个(可能是负数 = 最不差)
+        # via_sector = 正向净流入最大的那个
         via_code, via_flow = max(
-            matched_flows, key=lambda p: p[1].main_inflow_wan_x10000
+            positive_flows, key=lambda p: p[1].main_inflow_wan_x10000
         )
         via_mapping = verified_by_code[via_code]
         sb = engine.calculate_persistence_score(via_code, as_of=latest_date)
@@ -123,7 +130,7 @@ def build_top_funds(
             "related_sectors": list(fund.related_sectors or []),
             "matched_sectors": [
                 {"sector_code": code, "sector_name": flow.sector_name}
-                for code, flow in matched_flows
+                for code, flow in positive_flows
             ],
             "via_sector_code": via_code,
             "via_sector_name": via_flow.sector_name,

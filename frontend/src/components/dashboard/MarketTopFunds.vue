@@ -76,7 +76,7 @@ function scoreChipClass(score: number): string {
       </p>
       <template v-else-if="data">
         <p v-if="data.funds.length === 0" class="text-gray-400 text-sm">
-          暂无数据(候选池基金的板块当日无数据)
+          暂无正向主力流入候选
         </p>
         <template v-else>
           <p class="text-xs text-gray-400 mb-2 tabular-nums">
