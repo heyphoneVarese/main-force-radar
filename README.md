@@ -108,6 +108,9 @@ npm run dev
 ### 注意事项
 
 - **SQLite 数据**在 `backend/data/main_force_radar.db`(host 卷挂载),`docker compose down` 不删数据,`down -v` 才删
+- **本地 SQLite 只是开发数据**:本地 `backend/main_force_radar.db` 只用于开发/测试,不代表生产数据新鲜度。
+- **生产 SQLite 以 VPS 容器卷为准**:VPS 上 backend 容器实际使用 `/app/data/main_force_radar.db`,对应宿主机 `backend/data/main_force_radar.db`。
+- **判断数据新鲜度必须查 VPS**:排查 `sector_flow_daily` / `market_index_daily` / `intraday_sector_flow` 是否更新时,优先在 VPS 项目目录执行 `scripts/check_prod_data.sh`,不要用本地开发 DB 判断生产状态。
 - **`backend/.env` 不要提交到 git**(已 gitignore;包含 API key + SCKEY)
 - **SCHEDULER_ENABLED=true** 后,5 个 push cron 自动跑(Asia/Shanghai 时区):
   - 08:30 mon-fri 盘前简报
