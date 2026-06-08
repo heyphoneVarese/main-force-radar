@@ -83,11 +83,31 @@ def _source_type(source: str, is_fresh: bool) -> str:
     return source
 
 
+def _display_status(
+    *,
+    source: str,
+    is_fresh: bool,
+    data_dt: datetime | None,
+    now: datetime,
+) -> str:
+    """返回前端可直接展示的事实状态,避免浏览器自行判断交易日。"""
+    if data_dt is None:
+        return "no_data"
+    if not is_fresh:
+        return "stale"
+    if data_dt.date() != now.date():
+        return "previous_trading_day"
+    if source == "intraday":
+        return "today_intraday"
+    return "today_close"
+
+
 def _with_time_meta(
     payload: dict[str, Any],
     *,
     source: str,
     data_dt: datetime | None,
+    now: datetime,
     updated_at: datetime | None = None,
 ) -> dict[str, Any]:
     data_date = data_dt.date() if data_dt is not None else None
@@ -96,6 +116,12 @@ def _with_time_meta(
     payload["data_time"] = data_time
     payload["source_type"] = _source_type(source, bool(payload["is_fresh"]))
     payload["updated_at"] = updated_at or data_dt
+    payload["display_status"] = _display_status(
+        source=source,
+        is_fresh=bool(payload["is_fresh"]),
+        data_dt=data_dt,
+        now=now,
+    )
     return payload
 
 
@@ -116,7 +142,7 @@ def assess_intraday_freshness(
             "latest_time": None,
             "age_minutes": None,
             "reason": "intraday_sector_flow 表为空(intraday_fetch 从未成功)",
-        }, source="intraday", data_dt=None)
+        }, source="intraday", data_dt=None, now=now)
 
     updated_at = session.scalar(
         select(func.max(IntradaySectorFlow.created_at)).where(
@@ -143,7 +169,7 @@ def assess_intraday_freshness(
                     f"当前在交易时间窗口,但最新 snapshot 是 {latest.date()},"
                     f"不是今日 {today} — 盘中采集失败"
                 ),
-            }, source="intraday", data_dt=latest, updated_at=updated_at)
+            }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
         if age_min > _INTRADAY_MAX_AGE_IN_WINDOW_MIN:
             return _with_time_meta({
                 "source": "intraday",
@@ -154,14 +180,14 @@ def assess_intraday_freshness(
                     f"当前在交易时间窗口,但最新 snapshot 已 {age_min} 分钟"
                     f"未更新(期望 ≤ {_INTRADAY_MAX_AGE_IN_WINDOW_MIN} 分钟)"
                 ),
-            }, source="intraday", data_dt=latest, updated_at=updated_at)
+            }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
         return _with_time_meta({
             "source": "intraday",
             "is_fresh": True,
             "latest_time": latest,
             "age_minutes": age_min,
             "reason": f"盘中 snapshot 新鲜({age_min} 分钟前)",
-        }, source="intraday", data_dt=latest, updated_at=updated_at)
+        }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
 
     # 非交易时间窗口
     if latest.date() == today:
@@ -171,7 +197,7 @@ def assess_intraday_freshness(
             "latest_time": latest,
             "age_minutes": age_min,
             "reason": "非交易时间,最新 snapshot 是今日",
-        }, source="intraday", data_dt=latest, updated_at=updated_at)
+        }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
     gap_days = (today - latest.date()).days
     if gap_days <= _DAILY_MAX_AGE_DAYS:
         return _with_time_meta({
@@ -183,7 +209,7 @@ def assess_intraday_freshness(
                 f"非交易日,最新 snapshot 来自 {latest.date()}"
                 f"(距今 {gap_days} 日)"
             ),
-        }, source="intraday", data_dt=latest, updated_at=updated_at)
+        }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
     return _with_time_meta({
         "source": "intraday",
         "is_fresh": False,
@@ -193,7 +219,7 @@ def assess_intraday_freshness(
             f"最新 snapshot {latest.date()} 距今 {gap_days} 天,"
             "数据可能过期"
         ),
-    }, source="intraday", data_dt=latest, updated_at=updated_at)
+    }, source="intraday", data_dt=latest, now=now, updated_at=updated_at)
 
 
 def assess_daily_freshness(
@@ -222,7 +248,7 @@ def assess_daily_freshness(
             "latest_time": None,
             "age_minutes": None,
             "reason": f"{label} 表为空(daily_fetch 从未成功)",
-        }, source=label, data_dt=None)
+        }, source=label, data_dt=None, now=now)
 
     latest_dt = _to_dt(latest)
     updated_at = session.scalar(
@@ -247,7 +273,7 @@ def assess_daily_freshness(
                 f"{_DAILY_EXPECTED_MINUTE:02d},但 {label} 最新是 "
                 f"{latest} — daily_fetch 可能失败"
             ),
-        }, source=label, data_dt=latest_dt, updated_at=updated_at)
+        }, source=label, data_dt=latest_dt, now=now, updated_at=updated_at)
     if age_days > _DAILY_MAX_AGE_DAYS:
         return _with_time_meta({
             "source": label,
@@ -258,14 +284,14 @@ def assess_daily_freshness(
                 f"最新 trade_date {latest} 距今 {age_days} 天 — "
                 "数据可能过期"
             ),
-        }, source=label, data_dt=latest_dt, updated_at=updated_at)
+        }, source=label, data_dt=latest_dt, now=now, updated_at=updated_at)
     return _with_time_meta({
         "source": label,
         "is_fresh": True,
         "latest_time": latest_dt,
         "age_minutes": None,
         "reason": f"最新 trade_date {latest},距今 {age_days} 天",
-    }, source=label, data_dt=latest_dt, updated_at=updated_at)
+    }, source=label, data_dt=latest_dt, now=now, updated_at=updated_at)
 
 
 def assess_market_freshness(

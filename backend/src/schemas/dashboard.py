@@ -55,6 +55,10 @@ class FreshnessInfo(BaseModel):
         default=None,
         description="本地入库/生成更新时间;无行时为 null"
     )
+    display_status: str = Field(
+        default="no_data",
+        description="today_intraday / today_close / previous_trading_day / stale / no_data"
+    )
 
 
 class TimeMeta(BaseModel):
@@ -66,6 +70,9 @@ class TimeMeta(BaseModel):
     updated_at: datetime | None = Field(default=None)
     is_fresh: bool
     reason: str
+    display_status: str = Field(
+        description="today_intraday / today_close / previous_trading_day / stale / no_data"
+    )
 
 
 class MarketIndexResponse(BaseModel):
@@ -690,6 +697,16 @@ class HoldingSectorAlertItem(BaseModel):
     )
 
 
+class HoldingSectorAlertDiagnostics(BaseModel):
+    """空提醒诊断计数;只描述数据链路,不改变提醒门槛。"""
+
+    verified_held_fund_mappings: int = Field(ge=0)
+    below_threshold_mappings: int = Field(ge=0)
+    missing_latest_daily_rows: int = Field(ge=0)
+    latest_intraday_matches: int = Field(ge=0)
+    final_candidate_count: int = Field(ge=0)
+
+
 class HoldingSectorAlertsResponse(BaseModel):
     """持仓-板块事实预警响应(PR23)。
 
@@ -716,6 +733,8 @@ class HoldingSectorAlertsResponse(BaseModel):
         description="按 (holding_count, continuous_top20, |intraday|, name) 排;"
                     "最多 n 条(默认 10)"
     )
+    diagnostics: HoldingSectorAlertDiagnostics
+    empty_reason: str | None = Field(default=None)
     freshness: FreshnessInfo = Field(
         description="数据新鲜度评估(P0 fix);本端点优先汇报 intraday 状态"
     )

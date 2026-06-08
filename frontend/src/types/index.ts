@@ -66,7 +66,15 @@ export interface FreshnessInfo {
   data_time: string | null
   source_type: 'intraday' | 'daily_close' | 'cached' | 'stale'
   updated_at: string | null
+  display_status: FreshnessDisplayStatus
 }
+
+export type FreshnessDisplayStatus =
+  | 'today_intraday'
+  | 'today_close'
+  | 'previous_trading_day'
+  | 'stale'
+  | 'no_data'
 
 export interface TimeMeta {
   data_date: string | null
@@ -75,6 +83,7 @@ export interface TimeMeta {
   updated_at: string | null
   is_fresh: boolean
   reason: string
+  display_status: FreshnessDisplayStatus
 }
 
 export interface MarketIndex {
@@ -222,6 +231,14 @@ export interface HoldingSectorAlertsResponse {
   trade_date: string | null
   snapshot_time: string | null                 // ISO datetime;intraday 空 → null
   items: HoldingSectorAlertItem[]
+  diagnostics: {
+    verified_held_fund_mappings: number
+    below_threshold_mappings: number
+    missing_latest_daily_rows: number
+    latest_intraday_matches: number
+    final_candidate_count: number
+  }
+  empty_reason: string | null
   freshness: FreshnessInfo
   time_meta: TimeMeta
 }

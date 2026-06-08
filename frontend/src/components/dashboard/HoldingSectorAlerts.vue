@@ -4,7 +4,6 @@ import type {
   HoldingSectorAlertsResponse,
   HoldingSectorAlertType,
 } from '../../types'
-import DataTimeBadge from './DataTimeBadge.vue'
 import StaleBanner from './StaleBanner.vue'
 
 // 持仓-板块事实提醒(PR23 + PR24.1 可展开)。把板块连续性事实 + 盘中
@@ -64,6 +63,11 @@ function inflowColor(yi: string | null): string {
   return 'text-gray-600'
 }
 
+function fmtSnapshot(v: string | null): string {
+  if (!v) return '暂无'
+  return v.replace('T', ' ').slice(0, 16)
+}
+
 // PR24.1:用 Set<sector_code> 跟踪展开状态;每条独立
 const expandedSectorCodes = ref<Set<string>>(new Set())
 
@@ -91,12 +95,13 @@ function toggle(code: string): void {
           持仓-板块事实提醒
         </h3>
       </div>
-      <DataTimeBadge
-        v-if="status === 'ready'"
-        class="mt-1"
-        :time-meta="data?.time_meta"
-        :freshness="data?.freshness"
-      />
+      <div
+        v-if="status === 'ready' && data"
+        class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500 tabular-nums"
+      >
+        <span>收盘事实: {{ data.trade_date ?? '暂无' }}</span>
+        <span>盘中快照: {{ fmtSnapshot(data.snapshot_time) }}</span>
+      </div>
       <p class="text-xs text-gray-500 mt-1">
         把板块资金变化连接到我的持仓,不构成投资建议
       </p>
@@ -109,12 +114,21 @@ function toggle(code: string): void {
         ⚠ {{ error }}
       </p>
       <template v-else-if="data">
-        <p v-if="data.items.length === 0" class="text-gray-400 text-sm">
-          暂无提醒(可能:无持仓 / 收盘数据未到 / 暂无关联板块到达触发门槛)
-        </p>
+        <div v-if="data.items.length === 0" class="text-sm">
+          <p class="text-gray-500">{{ data.empty_reason ?? '暂无提醒' }}</p>
+          <p class="mt-1 text-xs text-gray-400">
+            高置信映射 {{ data.diagnostics.verified_held_fund_mappings }} ·
+            低置信 {{ data.diagnostics.below_threshold_mappings }} ·
+            缺收盘匹配 {{ data.diagnostics.missing_latest_daily_rows }} ·
+            盘中匹配 {{ data.diagnostics.latest_intraday_matches }} ·
+            提醒候选 {{ data.diagnostics.final_candidate_count }}
+          </p>
+        </div>
         <template v-else>
           <p class="text-xs text-gray-400 mb-2 tabular-nums">
-            共 {{ data.items.length }} 条 · 点击展开详情
+            共 {{ data.items.length }} 条 · 高置信映射
+            {{ data.diagnostics.verified_held_fund_mappings }} · 盘中匹配
+            {{ data.diagnostics.latest_intraday_matches }} · 点击展开详情
           </p>
           <ul class="space-y-3">
             <li

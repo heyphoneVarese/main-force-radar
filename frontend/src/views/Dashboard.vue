@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { dashboardApi } from '../api/client'
 import HoldingSectorAlerts from '../components/dashboard/HoldingSectorAlerts.vue'
+import DataTimeBadge from '../components/dashboard/DataTimeBadge.vue'
 import TodayFlowTop10 from '../components/dashboard/TodayFlowTop10.vue'
 import type { HoldingSectorAlertsResponse, TopSectors } from '../types'
 
@@ -55,6 +56,28 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4">
+    <section class="border-y border-gray-200 bg-white px-4 py-3">
+      <h2 class="text-sm font-semibold text-gray-800">数据状态</h2>
+      <div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+        <div>
+          <p class="text-xs font-medium text-gray-600">收盘资金数据</p>
+          <DataTimeBadge
+            class="mt-0.5"
+            :time-meta="inflowData?.time_meta"
+            :freshness="inflowData?.freshness"
+          />
+        </div>
+        <div>
+          <p class="text-xs font-medium text-gray-600">盘中持仓提醒快照</p>
+          <DataTimeBadge
+            class="mt-0.5"
+            :time-meta="alertsData?.time_meta"
+            :freshness="alertsData?.freshness"
+          />
+        </div>
+      </div>
+    </section>
+
     <!-- 第 1 屏:Top10 inflow + outflow -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <TodayFlowTop10

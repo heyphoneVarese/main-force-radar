@@ -63,6 +63,7 @@ def test_intraday_freshness_empty_table(db_session):
     assert out["is_fresh"] is False
     assert out["source"] == "intraday"
     assert out["latest_time"] is None
+    assert out["display_status"] == "no_data"
     assert "为空" in out["reason"]
 
 
@@ -75,6 +76,7 @@ def test_intraday_freshness_in_window_recent_is_fresh(db_session):
     out = assess_intraday_freshness(db_session, now=now)
     assert out["is_fresh"] is True
     assert out["age_minutes"] == 5
+    assert out["display_status"] == "today_intraday"
 
 
 def test_intraday_freshness_in_window_stale(db_session):
@@ -85,6 +87,7 @@ def test_intraday_freshness_in_window_stale(db_session):
     db_session.commit()
     out = assess_intraday_freshness(db_session, now=now)
     assert out["is_fresh"] is False
+    assert out["display_status"] == "stale"
     assert out["age_minutes"] >= 15
     assert "分钟" in out["reason"]
 
@@ -108,6 +111,7 @@ def test_intraday_freshness_after_close_today_ok(db_session):
     db_session.commit()
     out = assess_intraday_freshness(db_session, now=now)
     assert out["is_fresh"] is True
+    assert out["display_status"] == "today_intraday"
 
 
 def test_intraday_freshness_weekend_recent_ok(db_session):
@@ -118,6 +122,7 @@ def test_intraday_freshness_weekend_recent_ok(db_session):
     db_session.commit()
     out = assess_intraday_freshness(db_session, now=now)
     assert out["is_fresh"] is True
+    assert out["display_status"] == "previous_trading_day"
 
 
 def test_intraday_freshness_too_old(db_session):
@@ -128,6 +133,7 @@ def test_intraday_freshness_too_old(db_session):
     db_session.commit()
     out = assess_intraday_freshness(db_session, now=now)
     assert out["is_fresh"] is False
+    assert out["display_status"] == "stale"
     # reason 可能是 "距今 X 天" 也可能是 "不是今日";只要 stale 即可
     assert out["latest_time"] is not None
 
@@ -151,6 +157,7 @@ def test_daily_freshness_today_after_close_ok(db_session):
     db_session.commit()
     out = assess_daily_freshness(db_session, now=now)
     assert out["is_fresh"] is True
+    assert out["display_status"] == "today_close"
 
 
 def test_daily_freshness_past_close_but_no_today(db_session):
@@ -170,6 +177,7 @@ def test_daily_freshness_pre_close_uses_last_trading_day(db_session):
     db_session.commit()
     out = assess_daily_freshness(db_session, now=now)
     assert out["is_fresh"] is True
+    assert out["display_status"] == "previous_trading_day"
 
 
 def test_daily_freshness_too_old(db_session):
@@ -310,6 +318,9 @@ def test_endpoint_includes_freshness_field(_seed_minimal, client, path):
     assert "data_date" in f
     assert "data_time" in f
     assert "updated_at" in f
+    assert f["display_status"] in {
+        "today_intraday", "today_close", "previous_trading_day", "stale", "no_data",
+    }
     assert isinstance(f["reason"], str) and len(f["reason"]) > 0
     assert "time_meta" in body, f"{path} 缺 time_meta 字段"
     tm = body["time_meta"]
@@ -318,6 +329,7 @@ def test_endpoint_includes_freshness_field(_seed_minimal, client, path):
     assert "data_date" in tm
     assert "data_time" in tm
     assert "updated_at" in tm
+    assert tm["display_status"] == f["display_status"]
 
 
 def test_endpoint_freshness_marks_stale_when_old_data(db_session, client):

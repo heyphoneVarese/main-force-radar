@@ -1,18 +1,34 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
+import { nextTick, ref, watch } from 'vue'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
+
+const route = useRoute()
+const navRef = ref<HTMLElement | null>(null)
+
+watch(
+  () => route.fullPath,
+  async () => {
+    await nextTick()
+    navRef.value
+      ?.querySelector('.router-link-exact-active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <div class="min-h-screen bg-gray-50">
     <header class="bg-white border-b sticky top-0 z-10">
-      <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-        <div class="flex items-center gap-4 min-w-0 flex-1">
+      <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div class="flex flex-col gap-2 min-w-0 sm:flex-row sm:items-center sm:gap-4 sm:flex-1">
           <h1 class="text-xl font-bold text-gray-900 whitespace-nowrap shrink-0">
             主力风向标
           </h1>
           <!-- Phase 2:nav 5 项,移动端横向滚动避免挤压副标题 -->
           <nav
-            class="flex gap-1 text-sm overflow-x-auto min-w-0 nav-scroll"
+            ref="navRef"
+            class="flex w-full gap-0.5 sm:gap-1 text-sm overflow-x-auto min-w-0 nav-scroll"
           >
             <RouterLink to="/" class="nav-link">Dashboard</RouterLink>
             <RouterLink to="/continuity" class="nav-link">Continuity</RouterLink>
@@ -38,7 +54,7 @@ import { RouterLink, RouterView } from 'vue-router'
 <style scoped>
 /* 用 :deep + 全局类不方便,直接走 scoped + Vue Router 默认 active class */
 .nav-link {
-  @apply px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors;
+  @apply px-1 sm:px-3 py-1.5 rounded-md text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors shrink-0;
 }
 /* router-link-exact-active 是 Vue Router 默认给精确匹配路由加的类。
    只用 exact-active 而不是 active,避免 "/" 在所有页面都高亮(因为

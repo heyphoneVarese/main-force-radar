@@ -153,6 +153,8 @@ def test_alerts_empty_db_returns_empty(client):
     assert body["trade_date"] is None
     assert body["snapshot_time"] is None
     assert body["items"] == []
+    assert body["empty_reason"] == "暂无收盘板块资金数据"
+    assert body["diagnostics"]["final_candidate_count"] == 0
 
 
 # =====================================================================
@@ -166,6 +168,7 @@ def test_alerts_no_holdings_returns_empty(db_session, client):
     body = client.get("/api/dashboard/holding-sector-alerts").json()
     assert body["trade_date"] == "2026-05-31"
     assert body["items"] == []
+    assert body["empty_reason"] == "暂无持仓"
 
 
 # =====================================================================
@@ -208,6 +211,9 @@ def test_alerts_require_verified_sector_alias(db_session, client):
 
     body = client.get("/api/dashboard/holding-sector-alerts").json()
     assert body["items"] == []
+    assert body["diagnostics"]["verified_held_fund_mappings"] == 0
+    assert body["diagnostics"]["below_threshold_mappings"] == 2
+    assert "置信门槛" in body["empty_reason"]
 
 
 # =====================================================================
@@ -242,6 +248,9 @@ def test_alerts_intraday_outflow_on_long_persistence(db_session, client):
     # rank: 该 snapshot industry 内按 inflow DESC,半导体 -379 排最后
     assert it["intraday_rank"] == 3
     assert body["snapshot_time"] is not None
+    assert body["diagnostics"]["verified_held_fund_mappings"] == 3
+    assert body["diagnostics"]["latest_intraday_matches"] == 1
+    assert body["diagnostics"]["final_candidate_count"] == 1
     # message:不含禁词
     msg = it["message"]
     for banned in ["买入", "卖出", "加仓", "减仓", "推荐", "建议",
@@ -382,6 +391,23 @@ def test_alerts_no_daily_returns_empty(db_session, client):
     body = client.get("/api/dashboard/holding-sector-alerts").json()
     assert body["trade_date"] is None
     assert body["items"] == []
+
+
+def test_alerts_diagnose_missing_latest_daily_match(db_session, client):
+    """高置信映射存在,但最新 daily 行没有该 sector 时给出明确诊断。"""
+    db_session.add_all([
+        _mk_daily("其它", "BK_OTHER", date(2026, 5, 31), 5.0),
+        _mk_alias("半导体", "BK0490", "半导体"),
+        _mk_fund("F01", "半导体A", ["半导体"]),
+        _mk_holding("F01"),
+    ])
+    db_session.commit()
+
+    body = client.get("/api/dashboard/holding-sector-alerts").json()
+    assert body["items"] == []
+    assert body["diagnostics"]["verified_held_fund_mappings"] == 1
+    assert body["diagnostics"]["missing_latest_daily_rows"] == 1
+    assert body["empty_reason"] == "高置信持仓映射在最新收盘行业数据中无匹配"
 
 
 # =====================================================================

@@ -56,7 +56,7 @@ from src.services.sector_persistence import _compute_facts, _load_context
 
 def _collect_holding_sector_groups(
     session: Session,
-) -> dict[str, list[dict[str, str]]]:
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, int]]:
     """{sector_code: [{"fund_code","fund_name"}, ...]}。
 
     只考虑 holdings 表里实际持有的基金,并且只接受
@@ -66,8 +66,13 @@ def _collect_holding_sector_groups(
     held_codes: set[str] = set(
         session.scalars(select(Holding.fund_code)).all()
     )
+    diagnostics = {
+        "held_fund_count": len(held_codes),
+        "verified_held_fund_mappings": 0,
+        "below_threshold_mappings": 0,
+    }
     if not held_codes:
-        return {}
+        return {}, diagnostics
 
     groups: dict[str, list[dict[str, str]]] = {}
     for fund in session.scalars(
@@ -75,16 +80,19 @@ def _collect_holding_sector_groups(
     ):
         seen_codes: set[str] = set()
         for mapping in resolve_fund_sector_mappings(session, fund.fund_code):
+            if mapping.status == "low_confidence":
+                diagnostics["below_threshold_mappings"] += 1
             if not mapping.eligible_for_sorting or mapping.sector_code is None:
                 continue
             if mapping.sector_code in seen_codes:
                 continue
             seen_codes.add(mapping.sector_code)
+            diagnostics["verified_held_fund_mappings"] += 1
             groups.setdefault(mapping.sector_code, []).append({
                 "fund_code": fund.fund_code,
                 "fund_name": fund.fund_name or "",
             })
-    return groups
+    return groups, diagnostics
 
 
 def _load_intraday_industry(
@@ -234,17 +242,43 @@ def build_holding_sector_alerts(
           ]
         }
     """
+    holding_groups, mapping_diagnostics = _collect_holding_sector_groups(session)
+    diagnostics = {
+        "verified_held_fund_mappings": mapping_diagnostics[
+            "verified_held_fund_mappings"
+        ],
+        "below_threshold_mappings": mapping_diagnostics[
+            "below_threshold_mappings"
+        ],
+        "missing_latest_daily_rows": 0,
+        "latest_intraday_matches": 0,
+        "final_candidate_count": 0,
+    }
+
     ctx = _load_context(session)
     if ctx is None:
         # spec 7:daily 为空 → 空数组
-        return {"trade_date": None, "snapshot_time": None, "items": []}
+        return {
+            "trade_date": None,
+            "snapshot_time": None,
+            "items": [],
+            "diagnostics": diagnostics,
+            "empty_reason": "暂无收盘板块资金数据",
+        }
 
-    holding_groups = _collect_holding_sector_groups(session)
     if not holding_groups:
+        if mapping_diagnostics["held_fund_count"] == 0:
+            empty_reason = "暂无持仓"
+        elif diagnostics["below_threshold_mappings"] > 0:
+            empty_reason = "持仓映射均低于置信门槛或暂无高置信映射"
+        else:
+            empty_reason = "暂无可参与提醒判断的高置信持仓映射"
         return {
             "trade_date": ctx["latest_date"],
             "snapshot_time": None,
             "items": [],
+            "diagnostics": diagnostics,
+            "empty_reason": empty_reason,
         }
 
     latest_snapshot, intraday_by_code = _load_intraday_industry(session)
@@ -263,6 +297,15 @@ def build_holding_sector_alerts(
             continue
         latest_industry_by_code[key] = r
         by_inflow[key] = i
+
+    diagnostics["missing_latest_daily_rows"] = sum(
+        sector_code not in latest_industry_by_code
+        for sector_code in holding_groups
+    )
+    diagnostics["latest_intraday_matches"] = sum(
+        sector_code in intraday_by_code
+        for sector_code in holding_groups
+    )
 
     items: list[dict[str, Any]] = []
     for sector_code, fund_list in holding_groups.items():
@@ -331,9 +374,19 @@ def build_holding_sector_alerts(
         )
 
     items.sort(key=_sort_key)
+    diagnostics["final_candidate_count"] = len(items)
+
+    if items:
+        empty_reason = None
+    elif diagnostics["missing_latest_daily_rows"] == len(holding_groups):
+        empty_reason = "高置信持仓映射在最新收盘行业数据中无匹配"
+    else:
+        empty_reason = "持仓关联板块尚未达到提醒触发门槛"
 
     return {
         "trade_date": ctx["latest_date"],
         "snapshot_time": latest_snapshot,
         "items": items[:n],
+        "diagnostics": diagnostics,
+        "empty_reason": empty_reason,
     }

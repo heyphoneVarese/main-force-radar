@@ -16,6 +16,7 @@ function meta(): TimeMeta | null {
     updated_at: props.freshness.updated_at,
     is_fresh: props.freshness.is_fresh,
     reason: props.freshness.reason,
+    display_status: props.freshness.display_status,
   }
 }
 
@@ -24,6 +25,27 @@ function sourceLabel(source: string): string {
   if (source === 'daily_close') return '收盘'
   if (source === 'cached') return '缓存'
   return '过期'
+}
+
+function statusLabel(status: TimeMeta['display_status']): string {
+  const labels: Record<TimeMeta['display_status'], string> = {
+    today_intraday: '今日盘中',
+    today_close: '今日收盘',
+    previous_trading_day: '上一交易日',
+    stale: '数据滞后',
+    no_data: '暂无数据',
+  }
+  return labels[status]
+}
+
+function statusClass(status: TimeMeta['display_status']): string {
+  if (status === 'today_intraday' || status === 'today_close') {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  }
+  if (status === 'previous_trading_day') {
+    return 'bg-blue-50 text-blue-700 border-blue-200'
+  }
+  return 'bg-amber-50 text-amber-700 border-amber-200'
 }
 
 function fmtUpdatedAt(v: string | null): string {
@@ -47,13 +69,9 @@ function fmtUpdatedAt(v: string | null): string {
     <span>更新: {{ fmtUpdatedAt(meta()?.updated_at ?? null) }}</span>
     <span
       class="px-1.5 py-0.5 rounded border"
-      :class="
-        meta()?.is_fresh
-          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-          : 'bg-amber-50 text-amber-700 border-amber-200'
-      "
+      :class="statusClass(meta()?.display_status ?? 'no_data')"
     >
-      {{ meta()?.is_fresh ? '新鲜' : '过期' }}
+      {{ statusLabel(meta()?.display_status ?? 'no_data') }}
     </span>
   </div>
 </template>

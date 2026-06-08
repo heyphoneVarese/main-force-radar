@@ -112,6 +112,7 @@ def _time_meta(freshness: FreshnessInfo) -> TimeMeta:
         updated_at=freshness.updated_at,
         is_fresh=freshness.is_fresh,
         reason=freshness.reason,
+        display_status=freshness.display_status,
     )
 
 
@@ -1136,6 +1137,8 @@ def get_holding_sector_alerts(
         trade_date=raw["trade_date"],
         snapshot_time=raw["snapshot_time"],
         items=[_to_alert_item(it) for it in raw["items"]],
+        diagnostics=raw["diagnostics"],
+        empty_reason=raw["empty_reason"],
         # alerts 主要看盘中信号,优先汇报 intraday 新鲜度
         freshness=freshness,
         time_meta=_time_meta(freshness),
